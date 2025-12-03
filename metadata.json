@@ -1,0 +1,7 @@
+{
+  "name": "Pastel QC Master",
+  "description": "A modern, mobile-first Quality Control system with Excel import/export, dashboard analytics, and dark mode support.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
