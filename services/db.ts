@@ -10,27 +10,32 @@ const KEYS = {
   SESSION: 'qc_session'
 };
 
+// --- CONFIGURATION ---
+// ⚠️ นำ Web App URL ที่ได้จากการ Deploy Google Apps Script มาวางที่นี่
+export const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxrQBPExzqiQc0j6OFXtkxRyK0iCwSBs6CEqdeK7pVF277p19ctBoRHoV_LJaQn1ON0/exec'; 
+
+// Sample Data with Real Images (Unsplash)
 const SAMPLE_PRODUCTS: ProductMaster[] = [
-  { barcode: '8850001', productName: 'สมุดโน้ตพาสเทล A5', costPrice: 45, image: 'https://placehold.co/200/e0f2fe/0369a1?text=Notebook', stock: 50 },
-  { barcode: '8850002', productName: 'ปากกาเจลสีน้ำเงิน 0.5', costPrice: 12, image: 'https://placehold.co/200/dcfce7/15803d?text=Pen', stock: 120 },
-  { barcode: '8850003', productName: 'ชุดปากกาไฮไลท์ 5 สี', costPrice: 89, image: 'https://placehold.co/200/f3e8ff/7e22ce?text=Highlight', stock: 30 },
-  { barcode: '8850004', productName: 'เทปลบคำผิด', costPrice: 35, stock: 8 },
-  { barcode: '8850005', productName: 'โพสต์อิท 3x3 นิ้ว', costPrice: 25, image: 'https://placehold.co/200/ffedd5/c2410c?text=Sticky', stock: 200 },
-  { barcode: '8850006', productName: 'แฟ้มเอกสาร A4', costPrice: 120, stock: 15 },
-  { barcode: '8850007', productName: 'กรรไกรสแตนเลส 6 นิ้ว', costPrice: 55, image: 'https://placehold.co/200/fce7f3/be185d?text=Scissors', stock: 45 },
-  { barcode: '8850008', productName: 'เครื่องเย็บกระดาษ เบอร์ 10', costPrice: 60, stock: 60 },
-  { barcode: '8850009', productName: 'ลวดเย็บกระดาษ (กล่อง)', costPrice: 10, stock: 500 },
-  { barcode: '8850010', productName: 'คลิปหนีบกระดาษสี', costPrice: 15, stock: 150 },
-  { barcode: '8850011', productName: 'ไม้บรรทัดเหล็ก 30 ซม.', costPrice: 18, stock: 80 },
-  { barcode: '8850012', productName: 'ยางลบก้อนขาว', costPrice: 8, stock: 300 },
-  { barcode: '8850013', productName: 'ดินสอไม้ 2B (แพ็ค)', costPrice: 40, stock: 25 },
-  { barcode: '8850014', productName: 'ดินสอกด 0.5', costPrice: 25, stock: 90 },
-  { barcode: '8850015', productName: 'ไส้ดินสอกด 0.5', costPrice: 10, stock: 200 },
-  { barcode: '8850016', productName: 'กาวแท่ง', costPrice: 22, stock: 75 },
-  { barcode: '8850017', productName: 'คัตเตอร์เล็ก', costPrice: 30, stock: 40 },
-  { barcode: '8850018', productName: 'แท่นตัดเทป', costPrice: 150, stock: 12 },
-  { barcode: '8850019', productName: 'เทปใส 1/2 นิ้ว', costPrice: 12, stock: 180 },
-  { barcode: '8850020', productName: 'กาวสองหน้าบาง', costPrice: 20, stock: 100 },
+  { barcode: '8850001', productName: 'สมุดโน้ตพาสเทล A5', costPrice: 45, image: 'https://images.unsplash.com/photo-1544816155-12df9643f363?auto=format&fit=crop&w=300&q=80', stock: 50 },
+  { barcode: '8850002', productName: 'ปากกาเจลสีน้ำเงิน 0.5', costPrice: 12, image: 'https://images.unsplash.com/photo-1585336261022-680e295ce3fe?auto=format&fit=crop&w=300&q=80', stock: 120 },
+  { barcode: '8850003', productName: 'ชุดปากกาไฮไลท์ 5 สี', costPrice: 89, image: 'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=300&q=80', stock: 30 },
+  { barcode: '8850004', productName: 'เทปลบคำผิด', costPrice: 35, image: 'https://images.unsplash.com/photo-1599691653806-03f1912a7620?auto=format&fit=crop&w=300&q=80', stock: 8 },
+  { barcode: '8850005', productName: 'โพสต์อิท 3x3 นิ้ว', costPrice: 25, image: 'https://images.unsplash.com/photo-1586165368502-1bad197a6461?auto=format&fit=crop&w=300&q=80', stock: 200 },
+  { barcode: '8850006', productName: 'แฟ้มเอกสาร A4', costPrice: 120, image: 'https://images.unsplash.com/photo-1586075010923-2dd4570fb338?auto=format&fit=crop&w=300&q=80', stock: 15 },
+  { barcode: '8850007', productName: 'กรรไกรสแตนเลส 6 นิ้ว', costPrice: 55, image: 'https://images.unsplash.com/photo-1598535806659-45037d00bc0b?auto=format&fit=crop&w=300&q=80', stock: 45 },
+  { barcode: '8850008', productName: 'เครื่องเย็บกระดาษ เบอร์ 10', costPrice: 60, image: 'https://images.unsplash.com/photo-1624516949069-b3287383796f?auto=format&fit=crop&w=300&q=80', stock: 60 },
+  { barcode: '8850009', productName: 'ลวดเย็บกระดาษ (กล่อง)', costPrice: 10, image: 'https://images.unsplash.com/photo-1616053351980-877478065094?auto=format&fit=crop&w=300&q=80', stock: 500 },
+  { barcode: '8850010', productName: 'คลิปหนีบกระดาษสี', costPrice: 15, image: 'https://images.unsplash.com/photo-1583485088034-697b5bc54ccd?auto=format&fit=crop&w=300&q=80', stock: 150 },
+  { barcode: '8850011', productName: 'ไม้บรรทัดเหล็ก 30 ซม.', costPrice: 18, image: 'https://images.unsplash.com/photo-1588863683050-48e2c4cf2c8e?auto=format&fit=crop&w=300&q=80', stock: 80 },
+  { barcode: '8850012', productName: 'ยางลบก้อนขาว', costPrice: 8, image: 'https://images.unsplash.com/photo-1627252238059-7d8857470656?auto=format&fit=crop&w=300&q=80', stock: 300 },
+  { barcode: '8850013', productName: 'ดินสอไม้ 2B (แพ็ค)', costPrice: 40, image: 'https://images.unsplash.com/photo-1598462058348-185c9dc537df?auto=format&fit=crop&w=300&q=80', stock: 25 },
+  { barcode: '8850014', productName: 'ดินสอกด 0.5', costPrice: 25, image: 'https://images.unsplash.com/photo-1583485088034-697b5bc54ccd?auto=format&fit=crop&w=300&q=80', stock: 90 },
+  { barcode: '8850015', productName: 'ไส้ดินสอกด 0.5', costPrice: 10, image: 'https://images.unsplash.com/photo-1598462058348-185c9dc537df?auto=format&fit=crop&w=300&q=80', stock: 200 },
+  { barcode: '8850016', productName: 'กาวแท่ง', costPrice: 22, image: 'https://images.unsplash.com/photo-1592305881475-4721d7b00346?auto=format&fit=crop&w=300&q=80', stock: 75 },
+  { barcode: '8850017', productName: 'คัตเตอร์เล็ก', costPrice: 30, image: 'https://images.unsplash.com/photo-1590425717326-788ee5c74238?auto=format&fit=crop&w=300&q=80', stock: 40 },
+  { barcode: '8850018', productName: 'แท่นตัดเทป', costPrice: 150, image: 'https://images.unsplash.com/photo-1616400619175-5beda3a17896?auto=format&fit=crop&w=300&q=80', stock: 12 },
+  { barcode: '8850019', productName: 'เทปใส 1/2 นิ้ว', costPrice: 12, image: 'https://images.unsplash.com/photo-1616400619175-5beda3a17896?auto=format&fit=crop&w=300&q=80', stock: 180 },
+  { barcode: '8850020', productName: 'กาวสองหน้าบาง', costPrice: 20, image: 'https://images.unsplash.com/photo-1582234032644-3d077c57022c?auto=format&fit=crop&w=300&q=80', stock: 100 },
 ];
 
 // --- Mock Data Initialization ---
@@ -43,7 +48,6 @@ const initDB = () => {
     localStorage.setItem(KEYS.USERS, JSON.stringify(defaultUsers));
   }
   if (!localStorage.getItem(KEYS.MASTER)) {
-    // Auto-seed with sample data if empty
     localStorage.setItem(KEYS.MASTER, JSON.stringify(SAMPLE_PRODUCTS));
   }
   if (!localStorage.getItem(KEYS.LOGS)) {
@@ -52,6 +56,21 @@ const initDB = () => {
 };
 
 initDB();
+
+// --- Google Sheet Helper ---
+const syncToGoogle = async (action: string, data: any) => {
+    if (!GOOGLE_SCRIPT_URL) return; // Skip if no URL
+    try {
+        await fetch(GOOGLE_SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors', // Important for GAS
+            headers: { 'Content-Type': 'text/plain' }, // GAS no-cors prefers text/plain or empty
+            body: JSON.stringify({ action, data })
+        });
+    } catch (e) {
+        console.error("Google Sync Error:", e);
+    }
+}
 
 // --- Auth Services ---
 export const loginUser = (username: string): User | null => {
@@ -102,6 +121,11 @@ export const saveProduct = (product: ProductMaster) => {
     products.push(product);
   }
   localStorage.setItem(KEYS.MASTER, JSON.stringify(products));
+  
+  // Sync all products to Google Sheet (Optional - Heavy operation)
+  if (GOOGLE_SCRIPT_URL) {
+      syncToGoogle('syncProducts', products);
+  }
 };
 
 export const importMasterData = async (file: File): Promise<number> => {
@@ -124,7 +148,7 @@ export const importMasterData = async (file: File): Promise<number> => {
           image: String(row['Image'] || row['image'] || row['ImageUrl'] || ''),
         })).filter(p => p.barcode && p.productName);
 
-        // Merge with existing (Overwrite duplicates based on barcode)
+        // Merge with existing
         const existing = getMasterData();
         const existingMap = new Map(existing.map(p => [p.barcode, p]));
         
@@ -132,7 +156,12 @@ export const importMasterData = async (file: File): Promise<number> => {
         
         const merged = Array.from(existingMap.values());
         localStorage.setItem(KEYS.MASTER, JSON.stringify(merged));
-        // Simulate network delay
+        
+        // Sync to Google
+        if (GOOGLE_SCRIPT_URL) {
+            syncToGoogle('syncProducts', merged);
+        }
+
         setTimeout(() => resolve(products.length), 800);
       } catch (err) {
         reject(err);
@@ -146,10 +175,12 @@ export const importMasterData = async (file: File): Promise<number> => {
 export const deleteProduct = (barcode: string) => {
   const data = getMasterData().filter(p => p.barcode !== barcode);
   localStorage.setItem(KEYS.MASTER, JSON.stringify(data));
+  if (GOOGLE_SCRIPT_URL) syncToGoogle('syncProducts', data);
 };
 
 export const seedMasterData = (): ProductMaster[] => {
   localStorage.setItem(KEYS.MASTER, JSON.stringify(SAMPLE_PRODUCTS));
+  if (GOOGLE_SCRIPT_URL) syncToGoogle('syncProducts', SAMPLE_PRODUCTS);
   return SAMPLE_PRODUCTS;
 };
 
@@ -168,6 +199,12 @@ export const saveQCRecord = (record: Omit<QCRecord, 'id' | 'timestamp'>): QCReco
   };
   logs.unshift(newRecord); // Add to top
   localStorage.setItem(KEYS.LOGS, JSON.stringify(logs));
+
+  // Sync Log to Google Sheet
+  if (GOOGLE_SCRIPT_URL) {
+      syncToGoogle('saveQC', newRecord);
+  }
+
   return newRecord;
 };
 
