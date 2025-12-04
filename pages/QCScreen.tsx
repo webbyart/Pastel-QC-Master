@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { getProductByBarcode, saveQCRecord, compressImage } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const QCScreen: React.FC = () => {
@@ -19,6 +19,9 @@ export const QCScreen: React.FC = () => {
   const [reason, setReason] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [errors, setErrors] = useState<{[key:string]: string}>({});
+  
+  // New Features State
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
@@ -30,7 +33,6 @@ export const QCScreen: React.FC = () => {
         const needsReason = status === QCStatus.DAMAGE || (price === 0 && sellingPrice !== '');
         
         if (needsReason && reasonRef.current) {
-            // Small delay to ensure render
             setTimeout(() => reasonRef.current?.focus(), 100);
         }
     }
@@ -61,11 +63,20 @@ export const QCScreen: React.FC = () => {
         newImages.push(base64);
       }
       setImages(newImages);
-      // Clear error if resolved
       if (newImages.length > 0) {
           setErrors(prev => ({...prev, images: ''}));
       }
     }
+  };
+
+  const moveImage = (index: number, direction: 'left' | 'right') => {
+    const newImages = [...images];
+    if (direction === 'left' && index > 0) {
+      [newImages[index - 1], newImages[index]] = [newImages[index], newImages[index - 1]];
+    } else if (direction === 'right' && index < newImages.length - 1) {
+      [newImages[index + 1], newImages[index]] = [newImages[index], newImages[index + 1]];
+    }
+    setImages(newImages);
   };
 
   const validate = () => {
@@ -105,11 +116,9 @@ export const QCScreen: React.FC = () => {
         imageUrls: images,
         inspectorId: user.username
       });
-      // Reset
       setStep('scan');
       setBarcode('');
       setProduct(null);
-      // Focus back on input
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   };
@@ -211,8 +220,15 @@ export const QCScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Reason & Photos - Always Visible but Validation changes */}
-              <div className="space-y-5 animate-fade-in bg-gray-50 dark:bg-gray-700/30 p-4 rounded-2xl">
+              {/* Reason & Photos Section with Enhanced Visuals */}
+              <div className={`space-y-5 animate-fade-in p-5 rounded-2xl border-2 transition-all duration-300 ${isCriticalCondition ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-900/50' : 'bg-gray-50 dark:bg-gray-700/30 border-transparent'}`}>
+                  {isCriticalCondition && (
+                      <div className="flex items-center gap-2 text-orange-600 dark:text-orange-400 text-sm font-bold mb-2">
+                          <AlertCircle size={16} />
+                          <span>จำเป็นต้องระบุข้อมูลเพิ่มเติม</span>
+                      </div>
+                  )}
+
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                        หมายเหตุ / สาเหตุ {isCriticalCondition && <span className="text-red-500">*</span>}
@@ -221,7 +237,7 @@ export const QCScreen: React.FC = () => {
                       ref={reasonRef}
                       value={reason}
                       onChange={(e) => setReason(e.target.value)}
-                      className={`w-full p-3 rounded-xl border ${errors.reason ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple`}
+                      className={`w-full p-3 rounded-xl border ${errors.reason ? 'border-red-500 ring-2 ring-red-100' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple`}
                       rows={3}
                       placeholder={isCriticalCondition ? "ระบุสาเหตุความเสียหาย..." : "เพิ่มบันทึกช่วยจำ (ไม่บังคับ)..."}
                     />
@@ -237,27 +253,46 @@ export const QCScreen: React.FC = () => {
                       {/* Prominent Upload Button */}
                       {images.length < 5 && (
                         <label className={`
-                            relative flex flex-col items-center justify-center w-24 h-24 border-2 border-dashed rounded-xl cursor-pointer transition-all bg-white dark:bg-gray-800
+                            relative flex flex-col items-center justify-center w-28 h-28 border-2 border-dashed rounded-xl cursor-pointer transition-all bg-white dark:bg-gray-800
                             ${isCriticalCondition && images.length === 0 
-                                ? 'border-pastel-purpleDark bg-purple-50 hover:bg-purple-100 dark:bg-purple-900/20' 
+                                ? 'border-orange-400 bg-orange-50 hover:bg-orange-100 dark:bg-orange-900/20 shadow-sm animate-pulse' 
                                 : 'border-gray-300 hover:border-pastel-blue dark:border-gray-600 dark:hover:bg-gray-700'}
                             ${errors.images ? 'border-red-400 bg-red-50' : ''}
                         `}>
-                           <Camera size={24} className={isCriticalCondition && images.length === 0 ? "text-pastel-purpleDark" : "text-gray-400"} />
-                           <span className={`text-[10px] mt-1 font-medium ${isCriticalCondition && images.length === 0 ? "text-pastel-purpleDark" : "text-gray-400"}`}>เพิ่มรูป</span>
+                           <Camera size={24} className={isCriticalCondition && images.length === 0 ? "text-orange-500" : "text-gray-400"} />
+                           <span className={`text-[10px] mt-1 font-medium ${isCriticalCondition && images.length === 0 ? "text-orange-600" : "text-gray-400"}`}>เพิ่มรูป</span>
                            <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
                         </label>
                       )}
 
                       {images.map((img, idx) => (
-                        <div key={idx} className="relative w-24 h-24 rounded-xl overflow-hidden border border-gray-200 shadow-sm">
-                          <img src={img} alt="preview" className="w-full h-full object-cover" />
-                          <button 
-                             onClick={() => setImages(images.filter((_, i) => i !== idx))}
-                             className="absolute top-0 right-0 bg-red-500/80 hover:bg-red-500 text-white p-1 rounded-bl-lg backdrop-blur-sm transition-colors"
-                          >
-                            <X size={14} />
-                          </button>
+                        <div key={idx} className="relative w-28 h-28 rounded-xl overflow-hidden border border-gray-200 shadow-sm group bg-gray-100">
+                          <img 
+                            src={img} 
+                            alt="preview" 
+                            className="w-full h-full object-cover cursor-pointer hover:opacity-90 transition-opacity" 
+                            onClick={() => setPreviewImage(img)}
+                          />
+                          
+                          {/* Controls Overlay */}
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-1">
+                              <div className="flex justify-between">
+                                  <button onClick={(e) => { e.stopPropagation(); moveImage(idx, 'left'); }} disabled={idx === 0} className="p-1 text-white hover:bg-white/20 rounded disabled:opacity-30">
+                                      <ArrowLeft size={14} />
+                                  </button>
+                                  <button onClick={(e) => { e.stopPropagation(); setImages(images.filter((_, i) => i !== idx)); }} className="p-1 bg-red-500 text-white rounded hover:bg-red-600">
+                                      <X size={14} />
+                                  </button>
+                              </div>
+                              <div className="flex justify-between items-center">
+                                  <button onClick={(e) => { e.stopPropagation(); moveImage(idx, 'right'); }} disabled={idx === images.length - 1} className="p-1 text-white hover:bg-white/20 rounded disabled:opacity-30">
+                                      <ArrowRight size={14} />
+                                  </button>
+                                  <div className="bg-black/50 rounded-full p-1 cursor-pointer pointer-events-none">
+                                      <Eye size={12} className="text-white" />
+                                  </div>
+                              </div>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -281,6 +316,21 @@ export const QCScreen: React.FC = () => {
                  </button>
               </div>
            </div>
+        </div>
+      )}
+
+      {/* Image Preview Modal */}
+      {previewImage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm" onClick={() => setPreviewImage(null)}>
+            <div className="relative max-w-4xl w-full max-h-screen">
+                <button 
+                    onClick={() => setPreviewImage(null)}
+                    className="absolute -top-12 right-0 text-white hover:text-gray-300 transition-colors"
+                >
+                    <X size={32} />
+                </button>
+                <img src={previewImage} alt="Full size" className="w-full h-auto max-h-[85vh] object-contain rounded-lg shadow-2xl" />
+            </div>
         </div>
       )}
     </div>

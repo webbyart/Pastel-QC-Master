@@ -1,17 +1,23 @@
+
 import React, { useState, useEffect } from 'react';
 import { getQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<QCRecord[]>([]);
   const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   
   // Filters
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<QCStatus | 'All'>('All');
   const [dateFilter, setDateFilter] = useState('');
+  const [inspectorFilter, setInspectorFilter] = useState('All');
+
+  // Derived Data
+  const inspectors = Array.from(new Set(logs.map(l => l.inspectorId)));
 
   useEffect(() => {
     const data = getQCLogs();
@@ -34,21 +40,41 @@ export const Report: React.FC = () => {
       result = result.filter(l => l.status === statusFilter);
     }
 
+    if (inspectorFilter !== 'All') {
+      result = result.filter(l => l.inspectorId === inspectorFilter);
+    }
+
     if (dateFilter) {
       result = result.filter(l => l.timestamp.startsWith(dateFilter));
     }
 
     setFilteredLogs(result);
-  }, [logs, search, statusFilter, dateFilter]);
+  }, [logs, search, statusFilter, dateFilter, inspectorFilter]);
 
   const handleExport = async () => {
     setIsExporting(true);
+    setExportProgress(0);
+    
+    // Simulate Progress
+    const interval = setInterval(() => {
+        setExportProgress(prev => {
+            if (prev >= 95) return prev;
+            return prev + 5;
+        });
+    }, 50);
+
     try {
         await exportQCLogs();
+        clearInterval(interval);
+        setExportProgress(100);
+        setTimeout(() => {
+            setIsExporting(false);
+            setExportProgress(0);
+        }, 500);
     } catch (e) {
-        console.error(e);
-    } finally {
+        clearInterval(interval);
         setIsExporting(false);
+        console.error(e);
     }
   };
 
@@ -66,15 +92,25 @@ export const Report: React.FC = () => {
         <button 
            onClick={handleExport}
            disabled={isExporting}
-           className={`flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting ? 'opacity-70 cursor-wait' : ''}`}
+           className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting ? 'cursor-not-allowed' : ''}`}
         >
-           {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-           <span className="font-medium">{isExporting ? 'กำลังส่งออก...' : 'ส่งออก Excel'}</span>
+           {isExporting && (
+               <div className="absolute inset-0 bg-green-700/50">
+                   <div 
+                      className="h-full bg-green-600 transition-all duration-100 ease-linear" 
+                      style={{ width: `${exportProgress}%` }} 
+                   />
+               </div>
+           )}
+           <div className="relative z-10 flex items-center gap-2">
+               {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+               <span className="font-medium">{isExporting ? `กำลังส่งออก ${exportProgress}%` : 'ส่งออก Excel'}</span>
+           </div>
         </button>
       </header>
 
       {/* Filter Bar */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Search */}
         <div className="relative">
            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
@@ -100,9 +136,25 @@ export const Report: React.FC = () => {
             <option value={QCStatus.DAMAGE}>ชำรุด (Damage)</option>
           </select>
           <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-            <div className="bg-gray-200 dark:bg-gray-600 rounded-full p-1">
-               <svg className="w-3 h-3 text-gray-500 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
-            </div>
+            <ChevronDown size={14} className="text-gray-500" />
+          </div>
+        </div>
+
+        {/* Inspector Filter */}
+        <div className="relative">
+          <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <select 
+            value={inspectorFilter}
+            onChange={(e) => setInspectorFilter(e.target.value)}
+            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700"
+          >
+            <option value="All">ผู้ตรวจสอบทั้งหมด</option>
+            {inspectors.map(name => (
+                <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            <ChevronDown size={14} className="text-gray-500" />
           </div>
         </div>
 
@@ -186,7 +238,7 @@ export const Report: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile Card List View (Enhanced) */}
+        {/* Mobile Card List View */}
         <div className="md:hidden space-y-4">
            {filteredLogs.map(log => (
               <div 

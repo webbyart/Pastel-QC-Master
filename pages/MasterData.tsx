@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getMasterData, importMasterData, deleteProduct, saveProduct, seedMasterData, compressImage } from '../services/db';
 import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon } from 'lucide-react';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const MasterData: React.FC = () => {
@@ -10,12 +10,16 @@ export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<ProductMaster>>({});
+
+  // Delete Confirm State
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     // Simulate slight loading for effect
@@ -44,16 +48,31 @@ export const MasterData: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setIsImporting(true);
+      setImportProgress(0);
+      
+      // Simulate progress
+      const interval = setInterval(() => {
+        setImportProgress(prev => {
+            if (prev >= 90) return prev;
+            return prev + Math.random() * 10;
+        });
+      }, 100);
+
       try {
         const count = await importMasterData(e.target.files[0]);
-        // Small delay for UI feedback
+        clearInterval(interval);
+        setImportProgress(100);
+        
         setTimeout(() => {
             loadData();
             setIsImporting(false);
+            setImportProgress(0);
             alert(`✨ นำเข้าข้อมูลสำเร็จ ${count} รายการ!`);
-        }, 800);
+        }, 500);
       } catch (err) {
+        clearInterval(interval);
         setIsImporting(false);
+        setImportProgress(0);
         alert('เกิดข้อผิดพลาด กรุณาตรวจสอบไฟล์ .xlsx');
         console.error(err);
       }
@@ -61,9 +80,14 @@ export const MasterData: React.FC = () => {
   };
 
   const handleDelete = (barcode: string) => {
-    if (confirm('ยืนยันการลบสินค้านี้?')) {
-      deleteProduct(barcode);
-      loadData();
+    setDeleteId(barcode);
+  };
+
+  const confirmDelete = () => {
+    if (deleteId) {
+        deleteProduct(deleteId);
+        loadData();
+        setDeleteId(null);
     }
   };
 
@@ -140,11 +164,24 @@ export const MasterData: React.FC = () => {
             </button>
 
             <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
-                {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-                <span>{isImporting ? 'กำลังนำเข้า...' : 'นำเข้า Excel'}</span>
+                <Upload size={16} />
+                <span>นำเข้า Excel</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
             </label>
         </div>
+
+        {/* Import Progress Bar (Visible only when importing) */}
+        {isImporting && (
+             <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 overflow-hidden relative">
+                <div 
+                    className="bg-pastel-greenDark h-2.5 rounded-full transition-all duration-300 ease-out flex items-center justify-center relative" 
+                    style={{ width: `${importProgress}%` }}
+                >
+                    <div className="absolute top-0 bottom-0 left-0 right-0 bg-white/20 animate-pulse"></div>
+                </div>
+                <span className="absolute right-0 -top-4 text-xs font-bold text-gray-500">{Math.round(importProgress)}%</span>
+             </div>
+        )}
 
         {/* Search */}
         <div className="relative">
@@ -236,7 +273,7 @@ export const MasterData: React.FC = () => {
         </div>
       )}
 
-      {/* Mobile Grid View (Only visible on small screens) */}
+      {/* Mobile Grid View */}
       <div className="md:hidden grid grid-cols-1 gap-4">
         {filtered.map((product) => (
              <div 
@@ -270,7 +307,7 @@ export const MasterData: React.FC = () => {
         ))}
       </div>
 
-      {/* Modal */}
+      {/* Product Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setShowModal(false)} />
@@ -376,6 +413,36 @@ export const MasterData: React.FC = () => {
                 </form>
             </div>
         </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteId && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
+             <div className="bg-white dark:bg-gray-800 rounded-3xl p-6 shadow-2xl relative animate-slide-up max-w-sm w-full text-center">
+                 <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                     <AlertTriangle className="text-red-500" size={32} />
+                 </div>
+                 <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">ยืนยันการลบสินค้า?</h3>
+                 <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
+                     คุณแน่ใจหรือไม่ที่จะลบสินค้านี้ การกระทำนี้ไม่สามารถย้อนกลับได้
+                 </p>
+                 <div className="flex gap-3">
+                     <button 
+                         onClick={() => setDeleteId(null)}
+                         className="flex-1 py-3 bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded-xl font-bold"
+                     >
+                         ยกเลิก
+                     </button>
+                     <button 
+                         onClick={confirmDelete}
+                         className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-500/30"
+                     >
+                         ลบสินค้า
+                     </button>
+                 </div>
+             </div>
+          </div>
       )}
     </div>
   );
