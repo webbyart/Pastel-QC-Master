@@ -2,9 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { getUsers, saveUser, deleteUser, getApiUrl, setApiUrl, testApiConnection } from '../services/db';
+import { getUsers, saveUser, deleteUser, getApiUrl, setApiUrl, testApiConnection, clearCache } from '../services/db';
 import { User } from '../types';
-import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box, Link, Check, AlertCircle, CheckCircle, RefreshCw, HelpCircle, AlertTriangle } from 'lucide-react';
+import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box, Link, Check, AlertCircle, CheckCircle, RefreshCw, HelpCircle, AlertTriangle, Database } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const Settings: React.FC = () => {
@@ -73,6 +73,14 @@ export const Settings: React.FC = () => {
       const result = await testApiConnection();
       setTestResult(result);
       setIsTesting(false);
+  };
+  
+  const handleClearCache = () => {
+      if(confirm('คุณต้องการล้างแคชข้อมูลทั้งหมดหรือไม่? (ข้อมูลจะถูกโหลดใหม่จาก Google Sheet)')) {
+          clearCache();
+          alert('ล้างแคชเรียบร้อยแล้ว');
+          window.location.reload();
+      }
   };
 
   return (
@@ -186,6 +194,20 @@ export const Settings: React.FC = () => {
                 )}
             </div>
         </div>
+
+        {/* Maintenance */}
+         <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+             <div className="p-4 border-b border-gray-100 dark:border-gray-700 font-semibold text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider">
+                การจัดการข้อมูล
+             </div>
+             <button 
+               onClick={handleClearCache}
+               className="w-full text-left p-4 text-orange-500 hover:bg-orange-50 dark:hover:bg-orange-900/10 flex items-center gap-3 transition-colors font-medium"
+             >
+                <Database size={20} />
+                ล้างแคชข้อมูล (Clear Local Data)
+             </button>
+         </div>
 
         {/* Admin Section: Data Management */}
         {user?.role === 'admin' && (

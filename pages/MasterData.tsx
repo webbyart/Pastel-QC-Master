@@ -25,10 +25,11 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
+    // Initial load: prefer cache, then background sync (throttled)
     loadData(false);
   }, []);
 
-  const loadData = async (forceUpdate = false) => {
+  const loadData = async (isManualRefresh = false) => {
     if (!getApiUrl()) {
         setHasApiUrl(false);
         setIsLoading(false);
@@ -37,8 +38,8 @@ export const MasterData: React.FC = () => {
     
     setError(null);
 
-    // 1. Instant Cache
-    if (!forceUpdate) {
+    // 1. Instant Cache Display (only if not manual refresh)
+    if (!isManualRefresh) {
         try {
             const cached = await fetchMasterData(false);
             setProducts(cached);
@@ -50,15 +51,20 @@ export const MasterData: React.FC = () => {
         setIsRefreshing(true);
     }
     
-    // 2. Background Sync
+    // 2. Network Sync (Throttled unless manual)
     try {
-        const fresh = await fetchMasterData(true);
+        // fetchMasterData(forceUpdate, skipThrottle)
+        const fresh = await fetchMasterData(true, isManualRefresh);
         setProducts(fresh);
         setIsLoading(false);
     } catch(e: any) {
         console.error(e);
+        // Only show error screen if we have absolutely no data
         if (products.length === 0) {
             setError(e.message || "Failed to load products");
+        } else if (isManualRefresh) {
+            // If manual refresh failed but we have data, show alert
+            alert(`Update failed: ${e.message}`);
         }
     } finally {
         setIsRefreshing(false);

@@ -78,10 +78,11 @@ export const QCScreen: React.FC = () => {
             console.warn(e);
         }
 
-        // 2. Background Refresh
+        // 2. Background Refresh (Throttled)
         setIsRefreshing(true);
         try {
-            const freshData = await fetchMasterData(true);
+            // fetchMasterData(forceUpdate=true, skipThrottle=false)
+            const freshData = await fetchMasterData(true, false);
             setCachedProducts(freshData);
             setIsLoading(false);
         } catch(e: any) {

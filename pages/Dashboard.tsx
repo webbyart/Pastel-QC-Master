@@ -26,10 +26,11 @@ export const Dashboard: React.FC = () => {
             console.warn("Cache load error", e);
         }
 
-        // Step 2: Fetch fresh data in background
+        // Step 2: Fetch fresh data in background (Throttled)
         setIsRefreshing(true);
         try {
-            const freshData = await fetchQCLogs(true);
+            // fetchQCLogs(forceUpdate=true, skipThrottle=false)
+            const freshData = await fetchQCLogs(true, false);
             setLogs(freshData);
             setIsLoading(false);
         } catch (e: any) {
@@ -47,14 +48,21 @@ export const Dashboard: React.FC = () => {
 
   const handleManualRefresh = async () => {
       setIsRefreshing(true);
+      setIsLoading(true);
       setError(null);
       try {
-          const data = await fetchQCLogs(true);
+          // fetchQCLogs(forceUpdate=true, skipThrottle=true)
+          const data = await fetchQCLogs(true, true);
           setLogs(data);
+          if (data.length === 0) {
+             alert('เชื่อมต่อสำเร็จ แต่ไม่พบข้อมูลใน Sheet "QC_Logs"');
+          }
       } catch (e: any) {
           setError(e.message);
+          if(logs.length > 0) alert(`Update failed: ${e.message}`);
       } finally {
           setIsRefreshing(false);
+          setIsLoading(false);
       }
   };
 
@@ -137,7 +145,19 @@ export const Dashboard: React.FC = () => {
       {isLoading && logs.length === 0 ? (
           <div className="flex flex-col justify-center items-center h-[40vh] space-y-4">
               <Loader2 className="animate-spin text-pastel-blueDark" size={40} />
-              <p className="text-gray-400 animate-pulse">กำลังโหลดข้อมูล...</p>
+              <p className="text-gray-400 animate-pulse">กำลังโหลดข้อมูลจาก QC_Logs...</p>
+          </div>
+      ) : logs.length === 0 && !error ? (
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700">
+             <AlertTriangle size={48} className="mx-auto text-gray-300 mb-4" />
+             <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200">ไม่พบข้อมูลการตรวจสอบ</h3>
+             <p className="text-sm text-gray-500 mb-6">ยังไม่มีข้อมูลใน Sheet "QC_Logs" หรือการเชื่อมต่อมีปัญหา</p>
+             <button 
+                onClick={handleManualRefresh}
+                className="bg-pastel-blueDark text-white px-6 py-2 rounded-xl text-sm font-bold shadow-sm"
+            >
+                ลองโหลดใหม่ (Force Refresh)
+            </button>
           </div>
       ) : (
       <>
@@ -209,8 +229,8 @@ export const Dashboard: React.FC = () => {
                 {recentLogs.map(log => (
                     <div key={log.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700/50 rounded-xl">
                         <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-full ${log.status === 'Pass' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                                {log.status === 'Pass' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+                            <div className={`p-2 rounded-full ${log.status === QCStatus.PASS ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                {log.status === QCStatus.PASS ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
                             </div>
                             <div>
                                 <p className="font-medium text-sm text-gray-800 dark:text-gray-200">{log.productName}</p>

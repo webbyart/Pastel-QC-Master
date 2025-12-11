@@ -39,7 +39,7 @@ export const Report: React.FC = () => {
 
       // 2. Fetch fresh
       try {
-          const fresh = await fetchQCLogs(true);
+          const fresh = await fetchQCLogs(true, true); // Force refresh with skipThrottle
           setLogs(fresh);
       } catch(e) {
           console.error(e);
@@ -242,8 +242,8 @@ export const Report: React.FC = () => {
                   <th className="p-4">RMS ID</th>
                   <th className="p-4">Product Name</th>
                   <th className="p-4">Unit Price</th>
-                  <th className="p-4">Cost</th>
-                  <th className="p-4">Selling</th>
+                  <th className="p-4">ต้นทุน</th>
+                  <th className="p-4">ราคาขาย</th>
                   <th className="p-4">Comment</th>
                   <th className="p-4">Remark</th>
                 </tr>
@@ -340,7 +340,7 @@ export const Report: React.FC = () => {
                     <FileText size={24} className="opacity-50" />
                  </div>
                  <h3 className="font-bold text-gray-600 dark:text-gray-300">ไม่พบข้อมูล</h3>
-                 <p className="text-sm mt-1">ลองเปลี่ยนเงื่อนไขการค้นหา</p>
+                 <p className="text-sm mt-1">ลองเปลี่ยนเงื่อนไขการค้นหา หรือกดปุ่มรีเฟรช</p>
              </div>
            )}
         </div>
