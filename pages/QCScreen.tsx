@@ -1,10 +1,22 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { getProductByBarcode, saveQCRecord, compressImage } from '../services/db';
+import { fetchMasterData, saveQCRecord, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye } from 'lucide-react';
+import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye, ChevronDown, QrCode, Link, Loader2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+
+const REASON_OPTIONS = [
+  "Unsaleable : ขายไม่ได้",
+  "Unable to be used : ใช้งานไม่ได้",
+  "Damage : ชำรุด เสียหาย",
+  "Broken : แตก",
+  "False advertising : สินค้าไม่ตรงปก",
+  "Item defraud : สินค้าหลอกลวง",
+  "Missing Accessories : อุปกรณ์ไม่ครบ",
+  "Lost Product : ไม่มีสินค้า",
+  "Other : ระบุเพิ่มเติม"
+];
 
 export const QCScreen: React.FC = () => {
   const { user } = useAuth();
@@ -13,18 +25,47 @@ export const QCScreen: React.FC = () => {
   const [product, setProduct] = useState<ProductMaster | null>(null);
   const [step, setStep] = useState<'scan' | 'form'>('scan');
   
+  // Data Cache
+  const [cachedProducts, setCachedProducts] = useState<ProductMaster[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasApiUrl, setHasApiUrl] = useState(true);
+  
   // Form State
   const [sellingPrice, setSellingPrice] = useState<string>('');
   const [status, setStatus] = useState<QCStatus>(QCStatus.PASS);
-  const [reason, setReason] = useState('');
+  const [reason, setReason] = useState(''); // Comment
+  const [remark, setRemark] = useState(''); // New Remark
+  const [isCustomReason, setIsCustomReason] = useState(false);
   const [images, setImages] = useState<string[]>([]);
   const [errors, setErrors] = useState<{[key:string]: string}>({});
+  
+  // New Fields
+  const [lotNo, setLotNo] = useState('');
+  const [productType, setProductType] = useState('');
+  const [rmsId, setRmsId] = useState('');
+  const [unitPrice, setUnitPrice] = useState<string>(''); // Product unit price (MSRP)
   
   // New Features State
   const [previewImage, setPreviewImage] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const reasonRef = useRef<HTMLTextAreaElement>(null);
+  const rmsRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const init = async () => {
+        if (!getApiUrl()) {
+            setHasApiUrl(false);
+            setIsLoading(false);
+            return;
+        }
+        const data = await fetchMasterData();
+        setCachedProducts(data);
+        setIsLoading(false);
+    };
+    init();
+  }, []);
 
   // Auto-focus logic for Reason when required
   useEffect(() => {
@@ -35,23 +76,41 @@ export const QCScreen: React.FC = () => {
         if (needsReason && reasonRef.current) {
             setTimeout(() => reasonRef.current?.focus(), 100);
         }
+        // Focus RMS ID on entry if not filled? No, usually focus Selling Price or first editable field
+        // But if RMS ID is the "Scan" key, it's already filled.
     }
   }, [status, sellingPrice, step]);
 
   const handleScan = (e: React.FormEvent) => {
     e.preventDefault();
-    const found = getProductByBarcode(barcode);
+    const found = cachedProducts.find(p => p.barcode === barcode);
     if (found) {
       setProduct(found);
       setSellingPrice(''); 
       setStatus(QCStatus.PASS);
       setReason('');
+      setRemark('');
+      setIsCustomReason(false);
       setImages([]);
+      
+      // Auto-fill from Master Data
+      setLotNo(found.lotNo || '');
+      setProductType(found.productType || '');
+      setRmsId(found.barcode); // Assuming Barcode IS the RMS ID
+      setUnitPrice(found.unitPrice?.toString() || ''); 
+      
       setErrors({});
       setStep('form');
     } else {
       setErrors({ scan: 'ไม่พบสินค้าในระบบ' });
     }
+  };
+
+  const handleStatusChange = (newStatus: QCStatus) => {
+    setStatus(newStatus);
+    setReason('');
+    setIsCustomReason(false);
+    setErrors({});
   };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -90,40 +149,72 @@ export const QCScreen: React.FC = () => {
     }
 
     if (status === QCStatus.DAMAGE) {
-      if (!reason.trim()) newErrors.reason = 'กรุณาระบุสาเหตุสำหรับสินค้าชำรุด';
+      if (!reason.trim()) newErrors.reason = 'กรุณาระบุ Comment (สาเหตุ) สำหรับสินค้าชำรุด';
       if (images.length === 0) newErrors.images = 'กรุณาอัปโหลดรูปภาพอย่างน้อย 1 รูปสำหรับสินค้าชำรุด';
     }
 
     if (price === 0) {
-      if (!reason.trim()) newErrors.reason = 'กรุณาระบุสาเหตุที่ราคาขายเป็น 0';
+      if (!reason.trim()) newErrors.reason = 'กรุณาระบุ Comment (สาเหตุ) ที่ราคาขายเป็น 0';
       if (images.length === 0) newErrors.images = 'กรุณาอัปโหลดรูปภาพอย่างน้อย 1 รูปที่ราคาขายเป็น 0';
     }
-
+    
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!product || !user) return;
     if (validate()) {
-      saveQCRecord({
+      setIsSaving(true);
+      await saveQCRecord({
         barcode: product.barcode,
         productName: product.productName,
         costPrice: product.costPrice,
         sellingPrice: parseFloat(sellingPrice) || 0,
         status,
-        reason,
+        reason, // Maps to Comment
+        remark, // New Remark
         imageUrls: images,
-        inspectorId: user.username
+        inspectorId: user.username,
+        // New Fields
+        lotNo,
+        productType,
+        rmsId,
+        unitPrice: parseFloat(unitPrice) || 0
       });
+      setIsSaving(false);
       setStep('scan');
       setBarcode('');
       setProduct(null);
+      setIsCustomReason(false);
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   };
 
+  const triggerScan = () => {
+      inputRef.current?.focus();
+      setErrors({ scan: 'พร้อมสแกน (Ready)' });
+      setTimeout(() => setErrors({}), 2000);
+  };
+
   const isCriticalCondition = status === QCStatus.DAMAGE || (parseFloat(sellingPrice) === 0 && sellingPrice !== '');
+
+  if (isLoading) {
+      return <div className="flex justify-center items-center h-[60vh]"><Loader2 className="animate-spin text-pastel-blueDark" size={40} /></div>;
+  }
+
+  if (!hasApiUrl) {
+    return (
+        <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6">
+            <div className="bg-red-50 p-6 rounded-full mb-4">
+                <Link size={48} className="text-red-500" />
+            </div>
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">ยังไม่ได้เชื่อมต่อ Google Sheet</h2>
+            <p className="text-gray-500 mb-6 max-w-md">ไปที่เมนู "ตั้งค่า" แล้วระบุ Web App URL</p>
+            <button onClick={() => navigate('/settings')} className="bg-pastel-blueDark text-white px-6 py-3 rounded-xl font-bold shadow-lg">ไปที่ตั้งค่า</button>
+        </div>
+    )
+  }
 
   return (
     <div className="max-w-2xl mx-auto pb-24 md:pb-0">
@@ -133,24 +224,36 @@ export const QCScreen: React.FC = () => {
             <Scan size={64} className="text-pastel-blueDark" />
           </div>
           <div className="text-center">
-            <h2 className="text-2xl font-bold text-gray-800 dark:text-white">สแกนสินค้า</h2>
-            <p className="text-gray-500">ยิงบาร์โค้ด หรือ พิมพ์รหัสสินค้า</p>
+            <h2 className="text-2xl font-bold text-gray-800 dark:text-white">สแกนสินค้า (RMS ID)</h2>
+            <p className="text-gray-500">พร้อมใช้งาน (Cached {cachedProducts.length} items)</p>
           </div>
           
           <form onSubmit={handleScan} className="w-full max-w-md relative">
-            <input
-              ref={inputRef}
-              type="text"
-              autoFocus
-              value={barcode}
-              onChange={(e) => setBarcode(e.target.value)}
-              placeholder="รหัสสินค้า..."
-              className="w-full pl-6 pr-4 py-4 text-lg rounded-2xl bg-white dark:bg-gray-800 shadow-xl border-2 border-transparent focus:border-pastel-blueDark focus:ring-0 transition-all dark:text-white"
-            />
-            <button type="submit" className="absolute right-2 top-2 bottom-2 bg-pastel-blueDark text-white px-6 rounded-xl font-medium shadow-md">
-              ตกลง
+            <div className="relative flex items-center">
+                <input
+                ref={inputRef}
+                type="text"
+                autoFocus
+                value={barcode}
+                onChange={(e) => setBarcode(e.target.value)}
+                placeholder="ระบุ RMS ID หรือ สแกน..."
+                className="w-full pl-6 pr-14 py-4 text-lg rounded-2xl bg-white dark:bg-gray-800 shadow-xl border-2 border-transparent focus:border-pastel-blueDark focus:ring-0 transition-all dark:text-white"
+                />
+                
+                {/* Scan Button Icon inside input area */}
+                <button 
+                    type="button" 
+                    onClick={triggerScan}
+                    className="absolute right-3 p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-xl hover:bg-pastel-blue hover:text-pastel-blueDark transition-colors"
+                >
+                    <QrCode size={24} />
+                </button>
+            </div>
+
+            <button type="submit" className="w-full mt-4 bg-pastel-blueDark text-white py-4 rounded-xl font-medium shadow-md hover:bg-sky-800 transition-colors">
+              ตกลง (OK)
             </button>
-            {errors.scan && <p className="text-red-500 mt-2 text-center bg-red-50 p-2 rounded">{errors.scan}</p>}
+            {errors.scan && <p className={`mt-2 text-center p-2 rounded ${errors.scan === 'พร้อมสแกน (Ready)' ? 'text-green-500 bg-green-50' : 'text-red-500 bg-red-50'}`}>{errors.scan}</p>}
           </form>
         </div>
       ) : (
@@ -162,10 +265,12 @@ export const QCScreen: React.FC = () => {
                  <span className="text-xs text-gray-500 font-mono bg-white dark:bg-gray-600 px-2 py-1 rounded border border-gray-200 dark:border-gray-500">{product?.barcode}</span>
               </div>
               <div className="flex gap-4 text-sm mt-2">
-                 <div className="flex items-center gap-1.5 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-lg text-blue-700 dark:text-blue-300">
-                    <Package size={14} />
-                    <span className="font-semibold">คงเหลือ: {product?.stock || 0}</span>
-                 </div>
+                 {product?.productType && (
+                    <div className="flex items-center gap-1.5 bg-blue-50 dark:bg-blue-900/20 px-3 py-1.5 rounded-lg text-blue-700 dark:text-blue-300">
+                        <Package size={14} />
+                        <span className="font-semibold">{product.productType}</span>
+                    </div>
+                 )}
                  <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-gray-500 dark:text-gray-400">
                     <span>ต้นทุน:</span>
                     <span className="font-semibold">฿{product?.costPrice}</span>
@@ -174,19 +279,50 @@ export const QCScreen: React.FC = () => {
            </div>
 
            <div className="p-6 space-y-6">
-              {/* Selling Price */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ราคาขาย (บาท)</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={sellingPrice}
-                  onChange={(e) => setSellingPrice(e.target.value)}
-                  className={`w-full p-4 text-2xl font-bold bg-gray-50 dark:bg-gray-900 border-2 ${errors.price ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'} rounded-2xl focus:ring-4 focus:ring-pastel-blue/20 focus:border-pastel-blueDark focus:outline-none dark:text-white transition-all`}
-                  placeholder="0.00"
-                />
-                {errors.price && <p className="text-red-500 text-xs mt-1 font-medium bg-red-50 inline-block px-2 py-0.5 rounded">{errors.price}</p>}
+              
+              {/* Row 1: RMS ID & Lot No */}
+              <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">RMS Return Item ID</label>
+                    <input
+                      ref={rmsRef}
+                      type="text"
+                      value={rmsId}
+                      readOnly
+                      className="w-full p-3 rounded-xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-500 cursor-not-allowed"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Lot no.</label>
+                    <input
+                      type="text"
+                      value={lotNo}
+                      readOnly
+                      className="w-full p-3 rounded-xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-500 cursor-not-allowed"
+                    />
+                  </div>
+              </div>
+
+               {/* Row 2: Type & Unit Price */}
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Type</label>
+                    <input
+                      type="text"
+                      value={productType}
+                      readOnly
+                       className="w-full p-3 rounded-xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-500 cursor-not-allowed"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Product Unit Price</label>
+                    <input
+                      type="number"
+                      value={unitPrice}
+                      readOnly
+                      className="w-full p-3 rounded-xl bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-500 cursor-not-allowed"
+                    />
+                  </div>
               </div>
 
               {/* Status Toggle */}
@@ -195,7 +331,7 @@ export const QCScreen: React.FC = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <button
                     type="button"
-                    onClick={() => setStatus(QCStatus.PASS)}
+                    onClick={() => handleStatusChange(QCStatus.PASS)}
                     className={`flex flex-col items-center justify-center gap-1 p-4 rounded-2xl border-2 transition-all duration-200 ${
                       status === QCStatus.PASS 
                       ? 'border-green-500 bg-green-50 text-green-700 shadow-md transform scale-[1.02]' 
@@ -207,7 +343,7 @@ export const QCScreen: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setStatus(QCStatus.DAMAGE)}
+                    onClick={() => handleStatusChange(QCStatus.DAMAGE)}
                     className={`flex flex-col items-center justify-center gap-1 p-4 rounded-2xl border-2 transition-all duration-200 ${
                       status === QCStatus.DAMAGE 
                       ? 'border-red-500 bg-red-50 text-red-700 shadow-md transform scale-[1.02]' 
@@ -220,7 +356,22 @@ export const QCScreen: React.FC = () => {
                 </div>
               </div>
 
-              {/* Reason & Photos Section with Enhanced Visuals */}
+              {/* Selling Price */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">ราคาขาย (Selling Price)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={sellingPrice}
+                  onChange={(e) => setSellingPrice(e.target.value)}
+                  className={`w-full p-4 text-2xl font-bold bg-gray-50 dark:bg-gray-900 border-2 ${errors.price ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'} rounded-2xl focus:ring-4 focus:ring-pastel-blue/20 focus:border-pastel-blueDark focus:outline-none dark:text-white transition-all`}
+                  placeholder="0.00"
+                />
+                {errors.price && <p className="text-red-500 text-xs mt-1 font-medium bg-red-50 inline-block px-2 py-0.5 rounded">{errors.price}</p>}
+              </div>
+
+              {/* Reason (Comment) & Photos Section */}
               <div className={`space-y-5 animate-fade-in p-5 rounded-2xl border-2 transition-all duration-300 ${isCriticalCondition ? 'bg-orange-50/50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-900/50' : 'bg-gray-50 dark:bg-gray-700/30 border-transparent'}`}>
                   {isCriticalCondition && (
                       <div className="flex items-center gap-2 text-orange-600 dark:text-orange-400 text-sm font-bold mb-2">
@@ -229,21 +380,68 @@ export const QCScreen: React.FC = () => {
                       </div>
                   )}
 
+                  {/* Comment (Reason) Dropdown */}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                       หมายเหตุ / สาเหตุ {isCriticalCondition && <span className="text-red-500">*</span>}
+                       Comment (สาเหตุ) {isCriticalCondition && <span className="text-red-500">*</span>}
                     </label>
-                    <textarea
-                      ref={reasonRef}
-                      value={reason}
-                      onChange={(e) => setReason(e.target.value)}
-                      className={`w-full p-3 rounded-xl border ${errors.reason ? 'border-red-500 ring-2 ring-red-100' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple`}
-                      rows={3}
-                      placeholder={isCriticalCondition ? "ระบุสาเหตุความเสียหาย..." : "เพิ่มบันทึกช่วยจำ (ไม่บังคับ)..."}
-                    />
-                     {errors.reason && <p className="text-red-500 text-xs mt-1 font-medium">{errors.reason}</p>}
+
+                    <div className="relative">
+                        <select 
+                            className={`w-full p-3 pr-10 rounded-xl border appearance-none ${errors.reason ? 'border-red-500 ring-2 ring-red-100' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple`}
+                            value={isCustomReason ? '__OTHER__' : reason}
+                            onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === '__OTHER__') {
+                                    setIsCustomReason(true);
+                                    setReason('');
+                                    setTimeout(() => reasonRef.current?.focus(), 100);
+                                } else {
+                                    setIsCustomReason(false);
+                                    setReason(val);
+                                }
+                            }}
+                        >
+                            <option value="">-- เลือก Comment --</option>
+                            {REASON_OPTIONS.map((opt) => (
+                                <option key={opt} value={opt === "Other : ระบุเพิ่มเติม" ? "__OTHER__" : opt}>
+                                    {opt}
+                                </option>
+                            ))}
+                        </select>
+                        <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                            <ChevronDown size={18} className="text-gray-500" />
+                        </div>
+                    </div>
+
+                    {isCustomReason && (
+                        <textarea
+                            ref={reasonRef}
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            className={`w-full mt-2 p-3 rounded-xl border ${errors.reason ? 'border-red-500 ring-2 ring-red-100' : 'border-gray-200 dark:border-gray-600'} bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple animate-fade-in`}
+                            rows={2}
+                            placeholder="ระบุสาเหตุเพิ่มเติม..."
+                        />
+                    )}
+                    {errors.reason && <p className="text-red-500 text-xs mt-1 font-medium">{errors.reason}</p>}
                   </div>
 
+                  {/* Remark Textarea */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                       Remark (หมายเหตุเพิ่มเติม)
+                    </label>
+                    <textarea
+                      value={remark}
+                      onChange={(e) => setRemark(e.target.value)}
+                      className="w-full p-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-pastel-purple"
+                      rows={2}
+                      placeholder="บันทึกช่วยจำ..."
+                    />
+                  </div>
+
+                  {/* Photos */}
                   <div>
                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                        รูปภาพประกอบ (สูงสุด 5 รูป) {isCriticalCondition && <span className="text-red-500">*</span>}
@@ -310,9 +508,10 @@ export const QCScreen: React.FC = () => {
                  </button>
                  <button 
                    onClick={handleSubmit}
-                   className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-pastel-blueDark to-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:shadow-xl hover:scale-[1.02] transition-all active:scale-95"
+                   disabled={isSaving}
+                   className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-pastel-blueDark to-blue-600 text-white font-bold shadow-lg shadow-blue-500/30 hover:shadow-xl hover:scale-[1.02] transition-all active:scale-95 disabled:opacity-50 flex justify-center items-center"
                  >
-                   บันทึกผล (Save Record)
+                   {isSaving ? <Loader2 className="animate-spin" /> : 'บันทึกผล (Save Record)'}
                  </button>
               </div>
            </div>

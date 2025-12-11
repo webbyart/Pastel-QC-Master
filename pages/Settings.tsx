@@ -2,9 +2,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { getUsers, saveUser, deleteUser } from '../services/db';
+import { getUsers, saveUser, deleteUser, getApiUrl, setApiUrl, testApiConnection } from '../services/db';
 import { User } from '../types';
-import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box } from 'lucide-react';
+import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box, Link, Check, AlertCircle, CheckCircle, RefreshCw, HelpCircle, AlertTriangle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const Settings: React.FC = () => {
@@ -16,11 +16,22 @@ export const Settings: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
+  
+  // API URL State
+  const [url, setUrl] = useState('');
+  const [savedUrl, setSavedUrl] = useState('');
+  
+  // Test Connection State
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{success: boolean; message?: string; error?: string} | null>(null);
 
   useEffect(() => {
     if (user?.role === 'admin') {
       setUsers(getUsers());
     }
+    const current = getApiUrl();
+    setUrl(current);
+    setSavedUrl(current);
   }, [user, showUserModal]);
 
   const handleSaveUser = (e: React.FormEvent) => {
@@ -43,6 +54,27 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const handleSaveUrl = () => {
+      setApiUrl(url);
+      setSavedUrl(url);
+      alert('บันทึก URL เรียบร้อยแล้ว');
+      // Clear previous test
+      setTestResult(null);
+  };
+
+  const handleTestConnection = async () => {
+      if (!url) return;
+      setIsTesting(true);
+      setTestResult(null);
+      
+      // Save temporarily to test
+      setApiUrl(url);
+      
+      const result = await testApiConnection();
+      setTestResult(result);
+      setIsTesting(false);
+  };
+
   return (
     <div className="space-y-6 pb-24 md:pb-0 animate-fade-in">
       <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white ml-2">ตั้งค่าระบบ (Settings)</h1>
@@ -60,6 +92,99 @@ export const Settings: React.FC = () => {
                 สิทธิ์: {user?.role}
             </p>
           </div>
+        </div>
+
+        {/* API Connection Settings */}
+        <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+             <div className="p-4 border-b border-gray-100 dark:border-gray-700 font-semibold text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider flex items-center gap-2">
+                <Link size={16} />
+                เชื่อมต่อ Google Sheets (API)
+            </div>
+            <div className="p-6">
+                <div className="mb-4 text-sm text-gray-500 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/10 p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
+                    <p className="font-bold text-blue-700 dark:text-blue-300 mb-2 flex items-center gap-2"><HelpCircle size={16}/> ขั้นตอนการเชื่อมต่อ:</p>
+                    <ul className="list-disc list-inside space-y-1 ml-1">
+                        <li>สร้าง Google Apps Script ใน Sheet ของคุณ</li>
+                        <li>กด <strong>Deploy</strong> &gt; <strong>New deployment</strong></li>
+                        <li>เลือก type: <strong>Web app</strong></li>
+                        <li>Execute as: <strong>Me</strong> (อีเมลของคุณ)</li>
+                        <li>Who has access: <strong>Anyone</strong> (สำคัญมาก!)</li>
+                        <li>Copy URL มาวางในช่องด้านล่าง</li>
+                    </ul>
+                </div>
+
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Google Script Web App URL</label>
+                <div className="flex flex-col md:flex-row gap-3">
+                    <input 
+                        type="text" 
+                        value={url}
+                        onChange={(e) => setUrl(e.target.value)}
+                        placeholder="https://script.google.com/macros/s/.../exec"
+                        className="flex-1 p-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 focus:ring-2 focus:ring-pastel-blue outline-none dark:text-white font-mono text-sm"
+                    />
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={handleTestConnection}
+                            disabled={!url || isTesting}
+                            className={`px-4 py-3 rounded-xl font-bold transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap ${isTesting ? 'bg-gray-100 text-gray-400' : 'bg-orange-100 text-orange-600 hover:bg-orange-200'}`}
+                        >
+                            <RefreshCw size={18} className={isTesting ? 'animate-spin' : ''} />
+                            {isTesting ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
+                        </button>
+                        <button 
+                            onClick={handleSaveUrl}
+                            className="bg-pastel-blueDark text-white px-6 py-3 rounded-xl font-bold hover:bg-sky-800 transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap"
+                        >
+                            <Check size={18} />
+                            บันทึก
+                        </button>
+                    </div>
+                </div>
+
+                {/* Test Result Message */}
+                {testResult && (
+                    <div className={`mt-4 p-4 rounded-xl flex items-start gap-3 animate-slide-up ${testResult.success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+                        {testResult.success ? <CheckCircle className="flex-shrink-0 mt-0.5" /> : <AlertCircle className="flex-shrink-0 mt-0.5" />}
+                        <div>
+                            <p className="font-bold">{testResult.success ? 'การเชื่อมต่อสำเร็จ!' : 'เชื่อมต่อล้มเหลว'}</p>
+                            <p className="text-sm mt-1 opacity-90">{testResult.message || testResult.error}</p>
+                        </div>
+                    </div>
+                )}
+                
+                {/* Troubleshooting Guide (Only Show on Error) */}
+                {testResult && !testResult.success && (
+                    <div className="mt-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-700 border-2 border-dashed border-gray-200 dark:border-gray-600 animate-slide-up">
+                        <h4 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-3">
+                            <AlertTriangle className="text-orange-500" size={20}/>
+                            แนวทางแก้ไขปัญหา (Troubleshooting)
+                        </h4>
+                        <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
+                             <div className="flex gap-3">
+                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">1</div>
+                                 <div>
+                                     <p className="font-semibold text-gray-800 dark:text-white">สิทธิ์การเข้าถึง (Who has access)</p>
+                                     <p>ต้องตั้งค่าเป็น <strong>"Anyone" (ทุกคน)</strong> เท่านั้น หากตั้งเป็น "Anyone with Google Account" หรือ "Only me" ระบบจะไม่สามารถดึงข้อมูลได้</p>
+                                 </div>
+                             </div>
+                             <div className="flex gap-3">
+                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">2</div>
+                                 <div>
+                                     <p className="font-semibold text-gray-800 dark:text-white">การ Deploy ใหม่</p>
+                                     <p>หากมีการแก้ไขโค้ดใน Script Editor ต้องกด <strong>Deploy &gt; New deployment</strong> ทุกครั้ง เพื่อให้โค้ดใหม่เริ่มทำงาน</p>
+                                 </div>
+                             </div>
+                             <div className="flex gap-3">
+                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">3</div>
+                                 <div>
+                                     <p className="font-semibold text-gray-800 dark:text-white">URL ถูกต้องหรือไม่?</p>
+                                     <p>URL ต้องลงท้ายด้วย <code>/exec</code> เสมอ ตรวจสอบว่าไม่มีตัวอักษรอื่นต่อท้าย</p>
+                                 </div>
+                             </div>
+                        </div>
+                    </div>
+                )}
+            </div>
         </div>
 
         {/* Admin Section: Data Management */}

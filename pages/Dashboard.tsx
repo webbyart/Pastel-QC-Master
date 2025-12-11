@@ -1,12 +1,22 @@
 
-import React, { useMemo } from 'react';
-import { getQCLogs } from '../services/db';
+import React, { useMemo, useState, useEffect } from 'react';
+import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
-import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity } from 'lucide-react';
-import { QCStatus } from '../types';
+import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2 } from 'lucide-react';
+import { QCStatus, QCRecord } from '../types';
 
 export const Dashboard: React.FC = () => {
-  const logs = getQCLogs();
+  const [logs, setLogs] = useState<QCRecord[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const init = async () => {
+        const data = await fetchQCLogs();
+        setLogs(data);
+        setIsLoading(false);
+    };
+    init();
+  }, []);
 
   const stats = useMemo(() => {
     return {
@@ -23,6 +33,14 @@ export const Dashboard: React.FC = () => {
   ];
 
   const recentLogs = logs.slice(0, 5);
+
+  if (isLoading) {
+      return (
+          <div className="flex justify-center items-center h-[60vh]">
+              <Loader2 className="animate-spin text-pastel-blueDark" size={40} />
+          </div>
+      )
+  }
 
   return (
     <div className="space-y-6 pb-20">

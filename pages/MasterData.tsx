@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { getMasterData, importMasterData, deleteProduct, saveProduct, seedMasterData, compressImage } from '../services/db';
+import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const MasterData: React.FC = () => {
@@ -12,6 +12,7 @@ export const MasterData: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [hasApiUrl, setHasApiUrl] = useState(true);
   
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -22,45 +23,28 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Simulate slight loading for effect
-    setTimeout(() => {
-        loadData();
-        setIsLoading(false);
-    }, 300);
+    loadData();
   }, []);
 
-  const loadData = () => {
-    setProducts(getMasterData());
-  };
-
-  const handleSeed = () => {
-    if (products.length > 0 && !confirm('ข้อมูลเดิมจะถูกลบและแทนที่ด้วยข้อมูลตัวอย่าง 20 รายการ ยืนยันหรือไม่?')) {
+  const loadData = async () => {
+    setIsLoading(true);
+    if (!getApiUrl()) {
+        setHasApiUrl(false);
+        setIsLoading(false);
         return;
     }
-    setIsLoading(true);
-    setTimeout(() => {
-        seedMasterData();
-        loadData();
-        setIsLoading(false);
-    }, 600);
+    const data = await fetchMasterData();
+    setProducts(data);
+    setIsLoading(false);
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setIsImporting(true);
-      setImportProgress(0);
+      setImportProgress(10);
       
-      // Simulate progress
-      const interval = setInterval(() => {
-        setImportProgress(prev => {
-            if (prev >= 90) return prev;
-            return prev + Math.random() * 10;
-        });
-      }, 100);
-
       try {
         const count = await importMasterData(e.target.files[0]);
-        clearInterval(interval);
         setImportProgress(100);
         
         setTimeout(() => {
@@ -70,10 +54,9 @@ export const MasterData: React.FC = () => {
             alert(`✨ นำเข้าข้อมูลสำเร็จ ${count} รายการ!`);
         }, 500);
       } catch (err) {
-        clearInterval(interval);
         setIsImporting(false);
         setImportProgress(0);
-        alert('เกิดข้อผิดพลาด กรุณาตรวจสอบไฟล์ .xlsx');
+        alert('เกิดข้อผิดพลาดในการนำเข้า');
         console.error(err);
       }
     }
@@ -83,10 +66,10 @@ export const MasterData: React.FC = () => {
     setDeleteId(barcode);
   };
 
-  const confirmDelete = () => {
+  const confirmDelete = async () => {
     if (deleteId) {
-        deleteProduct(deleteId);
-        loadData();
+        await deleteProduct(deleteId);
+        await loadData();
         setDeleteId(null);
     }
   };
@@ -110,27 +93,52 @@ export const MasterData: React.FC = () => {
     }
   };
 
-  const handleSaveProduct = (e: React.FormEvent) => {
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct.barcode || !editingProduct.productName) {
         alert('กรุณาระบุบาร์โค้ดและชื่อสินค้า');
         return;
     }
-    saveProduct({
+    setIsLoading(true);
+    await saveProduct({
         barcode: editingProduct.barcode,
         productName: editingProduct.productName,
         costPrice: Number(editingProduct.costPrice) || 0,
+        unitPrice: Number(editingProduct.unitPrice) || 0,
         stock: Number(editingProduct.stock) || 0,
-        image: editingProduct.image
+        image: editingProduct.image,
+        lotNo: editingProduct.lotNo,
+        productType: editingProduct.productType
     });
     setShowModal(false);
-    loadData();
+    await loadData();
+    setIsLoading(false);
   };
 
   const filtered = products.filter(p => 
     p.productName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    p.barcode.includes(searchTerm)
+    p.barcode.includes(searchTerm) ||
+    (p.lotNo && p.lotNo.includes(searchTerm)) ||
+    (p.productType && p.productType.toLowerCase().includes(searchTerm.toLowerCase()))
   );
+
+  if (!hasApiUrl) {
+      return (
+          <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6">
+              <div className="bg-red-50 p-6 rounded-full mb-4">
+                  <Link size={48} className="text-red-500" />
+              </div>
+              <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">ยังไม่ได้เชื่อมต่อ Google Sheet</h2>
+              <p className="text-gray-500 mb-6 max-w-md">กรุณาไปที่เมนู "ตั้งค่า" แล้วระบุ Google Apps Script Web App URL เพื่อเริ่มต้นใช้งาน</p>
+              <button 
+                onClick={() => navigate('/settings')}
+                className="bg-pastel-blueDark text-white px-6 py-3 rounded-xl font-bold shadow-lg"
+              >
+                  ไปที่ตั้งค่า
+              </button>
+          </div>
+      )
+  }
 
   return (
     <div className="space-y-6 pb-24 md:pb-0 animate-fade-in relative">
@@ -140,7 +148,7 @@ export const MasterData: React.FC = () => {
             <div>
             <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-2">
                 <Box className="text-pastel-blueDark" />
-                คลังสินค้า (Inventory)
+                คลังสินค้า (Scrap Crossborder)
             </h1>
             <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">จัดการรายการสินค้าทั้งหมด {products.length} รายการ</p>
             </div>
@@ -155,14 +163,6 @@ export const MasterData: React.FC = () => {
 
         {/* Action Bar */}
         <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
-            <button 
-                onClick={handleSeed}
-                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-purple/50 text-pastel-purpleDark dark:text-purple-300 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95"
-            >
-                <Sparkles size={16} />
-                สร้างข้อมูลตัวอย่าง
-            </button>
-
             <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
                 <Upload size={16} />
                 <span>นำเข้า Excel</span>
@@ -170,7 +170,7 @@ export const MasterData: React.FC = () => {
             </label>
         </div>
 
-        {/* Import Progress Bar (Visible only when importing) */}
+        {/* Import Progress Bar */}
         {isImporting && (
              <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 overflow-hidden relative">
                 <div 
@@ -188,7 +188,7 @@ export const MasterData: React.FC = () => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
             <input 
                 type="text" 
-                placeholder="ค้นหา ชื่อสินค้า หรือ บาร์โค้ด..." 
+                placeholder="ค้นหา ชื่อสินค้า, RMS ID, Lot หรือ Type..." 
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full pl-10 pr-4 py-3 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-gray-200 dark:border-gray-700 rounded-2xl focus:ring-2 focus:ring-pastel-blue focus:outline-none dark:text-white shadow-sm"
@@ -200,7 +200,7 @@ export const MasterData: React.FC = () => {
       {isLoading ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark mb-4" />
-              <p>กำลังโหลดข้อมูล...</p>
+              <p>กำลังเชื่อมต่อ Google Sheet...</p>
           </div>
       ) : filtered.length === 0 ? (
         // Empty State
@@ -210,17 +210,8 @@ export const MasterData: React.FC = () => {
             </div>
             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ไม่พบสินค้า</h3>
             <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-xs mx-auto">
-                {searchTerm ? 'ลองเปลี่ยนคำค้นหา' : 'เริ่มต้นโดยการเพิ่มสินค้าใหม่ หรือ สร้างข้อมูลตัวอย่าง'}
+                ไม่พบข้อมูลใน Sheet "Scrap Crossborder" หรือนำเข้าจาก Excel
             </p>
-            {!searchTerm && (
-                <button 
-                    onClick={handleSeed} 
-                    className="flex items-center gap-2 bg-gradient-to-r from-pastel-purple to-pastel-blue text-pastel-blueDark font-bold px-8 py-4 rounded-2xl shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1"
-                >
-                    <Sparkles size={20} />
-                    สร้างสินค้าตัวอย่าง 20 รายการ
-                </button>
-            )}
         </div>
       ) : (
         // Desktop Table View
@@ -228,34 +219,28 @@ export const MasterData: React.FC = () => {
             <table className="w-full text-left">
                 <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 text-sm">
                     <tr>
-                        <th className="p-4 pl-6 font-medium">รูปภาพ</th>
-                        <th className="p-4 font-medium">บาร์โค้ด</th>
+                        <th className="p-4 pl-6 font-medium">RMS ID</th>
+                        <th className="p-4 font-medium">Lot No.</th>
+                        <th className="p-4 font-medium">Type</th>
                         <th className="p-4 font-medium">ชื่อสินค้า</th>
-                        <th className="p-4 font-medium">คงเหลือ</th>
                         <th className="p-4 font-medium">ต้นทุน</th>
+                        <th className="p-4 font-medium">Unit Price</th>
                         <th className="p-4 font-medium text-right pr-6">จัดการ</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
                     {filtered.map(product => (
                         <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
-                            <td className="p-4 pl-6">
-                                <div className="w-12 h-12 rounded-lg bg-gray-100 dark:bg-gray-700 overflow-hidden border border-gray-200 dark:border-gray-600 flex items-center justify-center">
-                                    {product.image ? (
-                                        <img src={product.image} alt="" className="w-full h-full object-cover" />
-                                    ) : (
-                                        <Package size={20} className="text-gray-400" />
-                                    )}
-                                </div>
-                            </td>
-                            <td className="p-4 font-mono text-gray-600 dark:text-gray-300">{product.barcode}</td>
+                            <td className="p-4 pl-6 font-mono text-gray-600 dark:text-gray-300 font-bold">{product.barcode}</td>
+                            <td className="p-4 text-gray-600 dark:text-gray-300">{product.lotNo || '-'}</td>
+                             <td className="p-4 text-gray-600 dark:text-gray-300">
+                                 {product.productType ? (
+                                    <span className="px-2 py-1 rounded bg-blue-50 text-blue-600 text-xs font-bold">{product.productType}</span>
+                                 ) : '-'}
+                             </td>
                             <td className="p-4 font-bold text-gray-800 dark:text-white">{product.productName}</td>
-                            <td className="p-4">
-                                <span className={`px-2 py-1 rounded-full text-xs font-bold ${product.stock && product.stock < 10 ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`}>
-                                    {product.stock || 0}
-                                </span>
-                            </td>
                             <td className="p-4 font-medium text-gray-600 dark:text-gray-300">฿{product.costPrice.toFixed(2)}</td>
+                            <td className="p-4 font-medium text-gray-600 dark:text-gray-300">฿{(product.unitPrice || 0).toLocaleString()}</td>
                             <td className="p-4 text-right pr-6">
                                 <div className="flex justify-end gap-2">
                                     <button onClick={() => handleEdit(product)} className="p-2 text-blue-500 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
@@ -278,29 +263,29 @@ export const MasterData: React.FC = () => {
         {filtered.map((product) => (
              <div 
                 key={product.barcode} 
-                className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4 flex gap-4"
+                className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-4"
              >
-                <div className="w-20 h-20 flex-shrink-0 bg-gray-50 dark:bg-gray-700 rounded-xl overflow-hidden border border-gray-100 dark:border-gray-600 flex items-center justify-center">
-                    {product.image ? (
-                        <img src={product.image} alt={product.productName} className="w-full h-full object-cover" />
-                    ) : (
-                        <Package className="text-gray-300 dark:text-gray-500" size={32} />
-                    )}
-                </div>
-                <div className="flex-1 min-w-0">
-                    <div className="flex justify-between items-start">
-                        <span className="text-xs font-mono text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">{product.barcode}</span>
-                        <div className="flex gap-2">
-                             <button onClick={() => handleEdit(product)} className="text-blue-500"><Edit2 size={16} /></button>
-                             <button onClick={() => handleDelete(product.barcode)} className="text-red-500"><Trash2 size={16} /></button>
-                        </div>
+                <div className="flex justify-between items-start mb-2">
+                    <div>
+                        <span className="text-xs font-bold text-pastel-blueDark bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded">RMS: {product.barcode}</span>
+                        {product.lotNo && <span className="ml-2 text-xs text-gray-500">Lot: {product.lotNo}</span>}
                     </div>
-                    <h3 className="font-bold text-gray-800 dark:text-white mt-1 mb-2 truncate">{product.productName}</h3>
-                    <div className="flex justify-between items-center text-sm">
-                        <span className={`px-2 py-0.5 rounded text-xs font-bold ${product.stock && product.stock < 10 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
-                           คงเหลือ: {product.stock || 0}
-                        </span>
+                    <div className="flex gap-2">
+                            <button onClick={() => handleEdit(product)} className="text-blue-500"><Edit2 size={16} /></button>
+                            <button onClick={() => handleDelete(product.barcode)} className="text-red-500"><Trash2 size={16} /></button>
+                    </div>
+                </div>
+                
+                <h3 className="font-bold text-gray-800 dark:text-white mb-2">{product.productName}</h3>
+                
+                <div className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl">
+                    <div>
+                        <p className="text-xs text-gray-400">ต้นทุน</p>
                         <span className="font-bold text-gray-700 dark:text-gray-300">฿{product.costPrice.toFixed(2)}</span>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-xs text-gray-400">Unit Price</p>
+                        <span className="font-bold text-gray-700 dark:text-gray-300">฿{(product.unitPrice || 0).toLocaleString()}</span>
                     </div>
                 </div>
              </div>
@@ -323,37 +308,8 @@ export const MasterData: React.FC = () => {
                 </div>
                 
                 <form onSubmit={handleSaveProduct} className="p-6 space-y-5 overflow-y-auto">
-                    {/* Image Upload Area */}
-                    <div className="flex justify-center">
-                        <label className="relative cursor-pointer group">
-                             <div className="w-32 h-32 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center overflow-hidden hover:border-pastel-blue transition-colors">
-                                {editingProduct.image ? (
-                                    <img src={editingProduct.image} alt="Preview" className="w-full h-full object-cover" />
-                                ) : (
-                                    <div className="flex flex-col items-center text-gray-400">
-                                        <Camera size={24} className="mb-1" />
-                                        <span className="text-xs">เพิ่มรูปภาพ</span>
-                                    </div>
-                                )}
-                             </div>
-                             <div className="absolute -bottom-2 -right-2 bg-pastel-blueDark text-white p-2 rounded-full shadow-md group-hover:scale-110 transition-transform">
-                                <ImageIcon size={14} />
-                             </div>
-                             <input type="file" accept="image/*" className="hidden" onChange={handleProductImageUpload} />
-                        </label>
-                        {editingProduct.image && (
-                            <button 
-                                type="button"
-                                onClick={() => setEditingProduct({...editingProduct, image: ''})}
-                                className="absolute top-24 ml-24 bg-red-500 text-white p-1 rounded-full shadow-md hover:bg-red-600 transition-colors"
-                            >
-                                <X size={12} />
-                            </button>
-                        )}
-                    </div>
-
                     <div className="space-y-1">
-                        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">บาร์โค้ด</label>
+                        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">RMS Return Item ID (Barcode)</label>
                         <input 
                             type="text" 
                             required
@@ -361,19 +317,39 @@ export const MasterData: React.FC = () => {
                             value={editingProduct.barcode || ''}
                             onChange={e => setEditingProduct({...editingProduct, barcode: e.target.value})}
                             className={`w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-pastel-blue focus:bg-white dark:focus:bg-gray-800 transition-all outline-none ${isEditMode ? 'opacity-60 cursor-not-allowed' : ''}`}
-                            placeholder="สแกน หรือ พิมพ์..."
+                            placeholder="ระบุ RMS ID..."
                         />
                     </div>
                     
+                    <div className="grid grid-cols-2 gap-4">
+                         <div className="space-y-1">
+                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Lot No.</label>
+                            <input 
+                                type="text" 
+                                value={editingProduct.lotNo || ''}
+                                onChange={e => setEditingProduct({...editingProduct, lotNo: e.target.value})}
+                                className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-pastel-blue focus:bg-white dark:focus:bg-gray-800 transition-all outline-none"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Type</label>
+                            <input 
+                                type="text" 
+                                value={editingProduct.productType || ''}
+                                onChange={e => setEditingProduct({...editingProduct, productType: e.target.value})}
+                                className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-pastel-blue focus:bg-white dark:focus:bg-gray-800 transition-all outline-none"
+                            />
+                        </div>
+                    </div>
+
                     <div className="space-y-1">
-                        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">ชื่อสินค้า</label>
+                        <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Product Name</label>
                         <input 
                             type="text" 
                             required
                             value={editingProduct.productName || ''}
                             onChange={e => setEditingProduct({...editingProduct, productName: e.target.value})}
                             className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-pastel-blue focus:bg-white dark:focus:bg-gray-800 transition-all outline-none"
-                            placeholder="เช่น ปากกา, สมุด..."
                         />
                     </div>
                     
@@ -391,24 +367,26 @@ export const MasterData: React.FC = () => {
                                 placeholder="0.00"
                             />
                         </div>
-                        <div className="space-y-1">
-                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">คงเหลือ (Stock)</label>
+                         <div className="space-y-1">
+                            <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 ml-1">Unit Price (฿)</label>
                             <input 
                                 type="number" 
                                 min="0"
-                                value={editingProduct.stock || ''}
-                                onChange={e => setEditingProduct({...editingProduct, stock: Number(e.target.value)})}
+                                step="0.01"
+                                value={editingProduct.unitPrice || ''}
+                                onChange={e => setEditingProduct({...editingProduct, unitPrice: Number(e.target.value)})}
                                 className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-2 border-transparent focus:border-pastel-blue focus:bg-white dark:focus:bg-gray-800 transition-all outline-none font-mono"
-                                placeholder="0"
+                                placeholder="0.00"
                             />
                         </div>
                     </div>
 
                     <button 
                         type="submit" 
-                        className="w-full bg-gradient-to-r from-pastel-blueDark to-blue-600 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/30 transform active:scale-95 transition-all mt-4"
+                        disabled={isLoading}
+                        className="w-full bg-gradient-to-r from-pastel-blueDark to-blue-600 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/30 transform active:scale-95 transition-all mt-4 disabled:opacity-50"
                     >
-                        {isEditMode ? 'บันทึกการแก้ไข' : 'สร้างสินค้า'}
+                        {isLoading ? <Loader2 className="animate-spin mx-auto" /> : (isEditMode ? 'บันทึกการแก้ไข' : 'สร้างสินค้า')}
                     </button>
                 </form>
             </div>

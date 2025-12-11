@@ -6,11 +6,14 @@ export interface User {
 }
 
 export interface ProductMaster {
-  barcode: string;
+  barcode: string; // Maps to RMS Return Item ID
   productName: string;
-  costPrice: number;
-  image?: string; // Base64 or URL
+  costPrice: number; // Maps to ต้นทุน
+  unitPrice?: number; // Maps to Product unit price
+  image?: string; 
   stock?: number;
+  lotNo?: string; // New: Maps to Lot no.
+  productType?: string; // New: Maps to Type
 }
 
 export enum QCStatus {
@@ -25,9 +28,17 @@ export interface QCRecord {
   costPrice: number;
   sellingPrice: number;
   status: QCStatus;
-  reason: string;
-  imageUrls: string[]; // Base64 strings for this demo
-  timestamp: string; // ISO string
+  reason: string; 
+  remark?: string; 
+  
+  // Fields
+  lotNo?: string;
+  productType?: string;
+  rmsId?: string;
+  unitPrice?: number;
+
+  imageUrls: string[]; 
+  timestamp: string; 
   inspectorId: string;
 }
 
