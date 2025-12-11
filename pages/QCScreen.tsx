@@ -68,12 +68,16 @@ export const QCScreen: React.FC = () => {
         }
         
         setFetchError(null);
+        let hasCached = false;
 
         // 1. Instant Cache Load
         try {
             const data = await fetchMasterData(false);
-            setCachedProducts(data);
-            if(data.length > 0) setIsLoading(false);
+            if (data.length > 0) {
+                setCachedProducts(data);
+                setIsLoading(false);
+                hasCached = true;
+            }
         } catch (e) {
             console.warn(e);
         }
@@ -87,7 +91,7 @@ export const QCScreen: React.FC = () => {
             setIsLoading(false);
         } catch(e: any) {
             console.error(e);
-            if (cachedProducts.length === 0) {
+            if (!hasCached) {
                  setFetchError(e.message || "Failed to load master data");
             }
         } finally {

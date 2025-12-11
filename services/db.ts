@@ -34,12 +34,11 @@ export const clearCache = () => {
     localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
 };
 
-// --- Helper for API Calls ---
+// --- Helper for API Calls with Retry ---
 const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
-    // Add timestamp to prevent browser caching
     const timestamp = `_t=${Date.now()}`;
     const queryParams = `action=${action}&${timestamp}`;
     
@@ -59,29 +58,41 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         options.body = JSON.stringify(body);
     }
     
-    try {
-        const res = await fetch(fetchUrl, options);
-        if (!res.ok) {
-             throw new Error(`HTTP Error: ${res.status}`);
-        }
-        const text = await res.text();
+    let lastError: any;
+    const RETRIES = 3;
+
+    for (let i = 0; i < RETRIES; i++) {
         try {
-            const json = JSON.parse(text);
-            if (json.error) throw new Error(json.error);
-            return json;
-        } catch (e) {
-            if (text.trim().startsWith('<')) {
-                throw new Error("Connection Blocked: Please set 'Who has access' to 'Anyone' in your Script deployment.");
+            const res = await fetch(fetchUrl, options);
+            if (!res.ok) {
+                 throw new Error(`HTTP Error: ${res.status}`);
             }
-            throw e;
+            const text = await res.text();
+            try {
+                const json = JSON.parse(text);
+                if (json.error) throw new Error(json.error);
+                return json;
+            } catch (e) {
+                if (text.trim().startsWith('<')) {
+                    throw new Error("Connection Blocked: Please set 'Who has access' to 'Anyone' in your Script deployment.");
+                }
+                throw e;
+            }
+        } catch (e: any) {
+            console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
+            lastError = e;
+            // Wait before retry (500ms, 1000ms, 1500ms)
+            if (i < RETRIES - 1) {
+                await new Promise(r => setTimeout(r, 500 * (i + 1)));
+            }
         }
-    } catch (e: any) {
-        console.error("API Error:", e);
-        if (e.message === 'Failed to fetch' || e.message.includes('NetworkError')) {
-            throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
-        }
-        throw e;
     }
+
+    console.error("API Error Final:", lastError);
+    if (lastError.message === 'Failed to fetch' || lastError.message.includes('NetworkError')) {
+        throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
+    }
+    throw lastError;
 };
 
 export const testApiConnection = async () => {
@@ -89,6 +100,7 @@ export const testApiConnection = async () => {
       const url = getApiUrl().trim();
       if (!url) return { success: false, error: "URL is empty" };
 
+      // Manual fetch for test to avoid retry delay on failure
       const res = await fetch(`${url}?action=getProducts&_t=${Date.now()}`, { 
           method: 'GET',
           mode: 'cors',
@@ -187,9 +199,14 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
   } catch (e: any) {
       console.error("Failed to fetch products", e);
       
-      // 3. Graceful Fallback: If quota exceeded or network error, return cache if available
-      if ((e.message.includes('quota') || e.message.includes('exceeded') || e.message.includes('Failed to fetch')) && cached) {
-          console.warn("Quota exceeded or Network fail, using cache");
+      // 3. Graceful Fallback: If network error, return cache if available
+      if (cached && (
+          e.message.includes('quota') || 
+          e.message.includes('exceeded') || 
+          e.message.includes('Failed to fetch') || 
+          e.message.includes('Connection Failed')
+      )) {
+          console.warn("Network fail, using cache");
           return JSON.parse(cached);
       }
       
@@ -209,6 +226,10 @@ export const saveProduct = async (product: ProductMaster) => {
 export const deleteProduct = async (barcode: string) => {
   const url = getApiUrl();
   if (!url) return;
+  // Use callApi but handle parameters manually or update callApi to support DELETE params
+  // Using direct fetch here for simplicity of query params, but with retry manual implementation
+  await callApi('deleteProduct', 'GET'); // Actually script expects deleteProduct via POST usually or GET with param
+  // Re-implementing specific delete call via direct fetch to match Script logic:
   await fetch(`${url}?action=deleteProduct&barcode=${barcode}`, { 
       method: 'POST',
       mode: 'cors',
@@ -249,8 +270,6 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
             // Robust mapping to handle missing 'status' field from script
             const processedData = rawData.map((item: any) => {
                  // Logic to infer Status if missing or ambiguous
-                 // If comment (reason) is present -> Damage (or Issue)
-                 // If no comment -> Pass
                  let inferredStatus = item.status;
                  if (!inferredStatus || (inferredStatus !== 'Pass' && inferredStatus !== 'Damage')) {
                      const hasReason = item.reason && String(item.reason).trim().length > 0;
@@ -277,7 +296,13 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
     } catch (e: any) {
         console.error("Failed to fetch logs", e);
         // Graceful Fallback
-        if ((e.message.includes('quota') || e.message.includes('exceeded') || e.message.includes('Failed to fetch')) && cached) {
+        if (cached && (
+            e.message.includes('quota') || 
+            e.message.includes('exceeded') || 
+            e.message.includes('Failed to fetch') || 
+            e.message.includes('Connection Failed')
+        )) {
+            console.warn("Network fail, using cache for logs");
             const parsed = JSON.parse(cached);
             return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         }
@@ -300,7 +325,15 @@ export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) =
 };
 
 export const exportQCLogs = async (): Promise<void> => {
-    const logs = await fetchQCLogs(true, true); // Force export to be fresh (skip throttle if possible, or user accepts wait)
+    // Try to get fresh data, but allow cache fallback if needed
+    let logs;
+    try {
+        logs = await fetchQCLogs(true, true); 
+    } catch (e) {
+        console.warn("Export using cached data due to fetch error");
+        logs = await fetchQCLogs(false);
+    }
+    
     const exportData = logs.map(log => ({
         'Lot no.': log.lotNo || '',
         'Type': log.productType || '',

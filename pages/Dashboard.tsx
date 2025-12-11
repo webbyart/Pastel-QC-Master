@@ -17,11 +17,16 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     const init = async () => {
         setError(null);
+        let hasCachedData = false;
+
         // Step 1: Get cached data first
         try {
             const cachedData = await fetchQCLogs(false);
-            setLogs(cachedData);
-            if (cachedData.length > 0) setIsLoading(false);
+            if (cachedData.length > 0) {
+                setLogs(cachedData);
+                setIsLoading(false);
+                hasCachedData = true;
+            }
         } catch (e) {
             console.warn("Cache load error", e);
         }
@@ -35,7 +40,8 @@ export const Dashboard: React.FC = () => {
             setIsLoading(false);
         } catch (e: any) {
             console.error("Background refresh failed", e);
-            if (logs.length === 0) {
+            // ONLY show error if we don't have cached data
+            if (!hasCachedData) {
                  setError(e.message || "Failed to connect");
             }
         } finally {
@@ -59,6 +65,7 @@ export const Dashboard: React.FC = () => {
           }
       } catch (e: any) {
           setError(e.message);
+          // If we have data, just warn instead of breaking UI
           if(logs.length > 0) alert(`Update failed: ${e.message}`);
       } finally {
           setIsRefreshing(false);

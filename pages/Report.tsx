@@ -30,9 +30,13 @@ export const Report: React.FC = () => {
   const loadData = async (forceUpdate = false) => {
       // 1. Load from cache first
       if (!forceUpdate) {
-        const cached = await fetchQCLogs(false);
-        setLogs(cached);
-        setIsLoading(false);
+        try {
+            const cached = await fetchQCLogs(false);
+            setLogs(cached);
+            setIsLoading(false);
+        } catch (e) {
+            console.warn("Cache load error in Report", e);
+        }
       } else {
         setIsLoading(true);
       }
@@ -42,7 +46,8 @@ export const Report: React.FC = () => {
           const fresh = await fetchQCLogs(true, true); // Force refresh with skipThrottle
           setLogs(fresh);
       } catch(e) {
-          console.error(e);
+          console.error("Fetch fresh logs error:", e);
+          // Do nothing in UI if fresh fetch fails, keep showing cache
       } finally {
           setIsLoading(false);
       }
@@ -104,6 +109,7 @@ export const Report: React.FC = () => {
         clearInterval(interval);
         setIsExporting(false);
         console.error(e);
+        alert('การส่งออกข้อมูลล้มเหลว ลองใหม่อีกครั้ง');
     }
   };
 

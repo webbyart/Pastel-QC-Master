@@ -37,13 +37,17 @@ export const MasterData: React.FC = () => {
     }
     
     setError(null);
+    let hasCachedData = false;
 
     // 1. Instant Cache Display (only if not manual refresh)
     if (!isManualRefresh) {
         try {
             const cached = await fetchMasterData(false);
-            setProducts(cached);
-            if (cached.length > 0) setIsLoading(false);
+            if (cached.length > 0) {
+                setProducts(cached);
+                setIsLoading(false);
+                hasCachedData = true;
+            }
         } catch (e) {
             console.warn("Cache load failed", e);
         }
@@ -60,7 +64,7 @@ export const MasterData: React.FC = () => {
     } catch(e: any) {
         console.error(e);
         // Only show error screen if we have absolutely no data
-        if (products.length === 0) {
+        if (!hasCachedData) {
             setError(e.message || "Failed to load products");
         } else if (isManualRefresh) {
             // If manual refresh failed but we have data, show alert
