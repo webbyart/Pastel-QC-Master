@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
@@ -275,8 +275,8 @@ export const Report: React.FC = () => {
                   <tr>
                     <td colSpan={9} className="p-12 text-center text-gray-400">
                       <div className="flex flex-col items-center">
-                          <Search size={32} className="mb-2 opacity-20" />
-                          <p>ไม่พบข้อมูลตามเงื่อนไขที่กำหนด</p>
+                          <ClipboardList size={32} className="mb-2 opacity-20" />
+                          <p>{logs.length === 0 ? 'ยังไม่มีรายการตรวจสอบ' : 'ไม่พบข้อมูลตามเงื่อนไขที่กำหนด'}</p>
                       </div>
                     </td>
                   </tr>
@@ -343,10 +343,14 @@ export const Report: React.FC = () => {
            {filteredLogs.length === 0 && (
              <div className="p-12 text-center text-gray-400 bg-white dark:bg-gray-800 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
                  <div className="bg-gray-50 dark:bg-gray-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <FileText size={24} className="opacity-50" />
+                    <ClipboardList size={24} className="opacity-50" />
                  </div>
-                 <h3 className="font-bold text-gray-600 dark:text-gray-300">ไม่พบข้อมูล</h3>
-                 <p className="text-sm mt-1">ลองเปลี่ยนเงื่อนไขการค้นหา หรือกดปุ่มรีเฟรช</p>
+                 <h3 className="font-bold text-gray-600 dark:text-gray-300">
+                     {logs.length === 0 ? 'ยังไม่มีรายการตรวจสอบ' : 'ไม่พบข้อมูล'}
+                 </h3>
+                 <p className="text-sm mt-1">
+                     {logs.length === 0 ? 'เริ่มสแกนสินค้าเพื่อบันทึกข้อมูล' : 'ลองเปลี่ยนเงื่อนไขการค้นหา หรือกดปุ่มรีเฟรช'}
+                 </p>
              </div>
            )}
         </div>

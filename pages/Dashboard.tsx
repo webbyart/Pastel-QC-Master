@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
-import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw, AlertCircle, Settings as SettingsIcon } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw, AlertCircle, Settings as SettingsIcon, ClipboardList, ArrowRight } from 'lucide-react';
 import { QCStatus, QCRecord } from '../types';
 import { useNavigate } from 'react-router-dom';
 
@@ -164,22 +164,40 @@ export const Dashboard: React.FC = () => {
               <p className="text-gray-400 animate-pulse">กำลังโหลดข้อมูลจาก QC_Logs...</p>
           </div>
       ) : logs.length === 0 && !error ? (
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700">
-             <div className="bg-gray-50 dark:bg-gray-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                <AlertTriangle size={32} className="text-gray-300" />
+          <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 shadow-sm animate-fade-in">
+             <div className="bg-blue-50 dark:bg-blue-900/20 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-5">
+                <ClipboardList size={40} className="text-pastel-blueDark dark:text-pastel-blue" />
              </div>
-             <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200">ไม่พบข้อมูลการตรวจสอบ</h3>
-             <p className="text-sm text-gray-500 mb-6 max-w-xs mx-auto">
-                เชื่อมต่อสำเร็จ แต่ยังไม่มีข้อมูลใน Sheet "QC_Logs" 
-                <br/><br/>
-                <span className="text-xs bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 px-2 py-1 rounded">Tip: ตรวจสอบว่าใน Google Sheet มีแท็บชื่อ "QC_Logs" หรือไม่</span>
+             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ยังไม่มีประวัติการตรวจสอบ</h3>
+             <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-sm mx-auto leading-relaxed">
+                ระบบเชื่อมต่อสำเร็จและพร้อมใช้งาน! <br/>
+                เริ่มต้นสแกนสินค้าเพื่อบันทึกผลการตรวจสอบ (QC)
              </p>
-             <button 
-                onClick={handleManualRefresh}
-                className="bg-pastel-blueDark text-white px-6 py-2 rounded-xl text-sm font-bold shadow-sm hover:bg-sky-800 transition-colors"
-            >
-                ลองโหลดใหม่ (Force Refresh)
-            </button>
+             
+             <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                 <button 
+                    onClick={() => navigate('/qc')}
+                    className="flex items-center justify-center gap-2 bg-pastel-blueDark text-white px-6 py-3.5 rounded-xl font-bold shadow-lg shadow-blue-500/30 hover:bg-sky-800 transition-all active:scale-95"
+                >
+                    <ScanLine size={20} />
+                    เริ่มตรวจสอบสินค้า
+                </button>
+                 <button 
+                    onClick={handleManualRefresh}
+                    disabled={isRefreshing}
+                    className="flex items-center justify-center gap-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 px-6 py-3.5 rounded-xl font-bold hover:bg-gray-200 dark:hover:bg-gray-600 transition-all active:scale-95"
+                >
+                    <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
+                    รีเฟรชข้อมูล
+                </button>
+             </div>
+             
+             <div className="mt-8 pt-6 border-t border-gray-100 dark:border-gray-700/50">
+                 <p className="text-xs text-gray-400">
+                    หากคุณมั่นใจว่ามีข้อมูลใน Sheet "QC_Logs" แต่ไม่แสดง <br/>
+                    <span className="text-pastel-blueDark dark:text-pastel-blue cursor-pointer hover:underline" onClick={() => navigate('/settings')}>ตรวจสอบการตั้งค่าการเชื่อมต่อ</span>
+                </p>
+             </div>
           </div>
       ) : (
       <>
@@ -245,7 +263,10 @@ export const Dashboard: React.FC = () => {
 
         {/* Recent Activity */}
         <div className="bg-white dark:bg-gray-800 p-6 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-            <h3 className="text-lg font-semibold mb-4 text-gray-800 dark:text-white">กิจกรรมล่าสุด</h3>
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800 dark:text-white">กิจกรรมล่าสุด</h3>
+                <button onClick={() => navigate('/report')} className="text-xs text-pastel-blueDark font-bold hover:underline">ดูทั้งหมด</button>
+            </div>
             <div className="space-y-4">
                 {recentLogs.length === 0 && <p className="text-gray-400 text-sm">ยังไม่มีรายการตรวจสอบ</p>}
                 {recentLogs.map(log => (
@@ -255,7 +276,7 @@ export const Dashboard: React.FC = () => {
                                 {log.status === QCStatus.PASS ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
                             </div>
                             <div>
-                                <p className="font-medium text-sm text-gray-800 dark:text-gray-200">{log.productName}</p>
+                                <p className="font-medium text-sm text-gray-800 dark:text-gray-200 line-clamp-1">{log.productName}</p>
                                 <p className="text-xs text-gray-400">{new Date(log.timestamp).toLocaleTimeString('th-TH')}</p>
                             </div>
                         </div>
