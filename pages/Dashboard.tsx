@@ -54,14 +54,13 @@ export const Dashboard: React.FC = () => {
 
   const handleManualRefresh = async () => {
       setIsRefreshing(true);
-      setIsLoading(true);
       setError(null);
       try {
           // fetchQCLogs(forceUpdate=true, skipThrottle=true)
           const data = await fetchQCLogs(true, true);
           setLogs(data);
           if (data.length === 0) {
-             alert('เชื่อมต่อสำเร็จ แต่ไม่พบข้อมูลใน Sheet "QC_Logs"');
+             // alert('เชื่อมต่อสำเร็จ แต่ไม่พบข้อมูลใน Sheet "QC_Logs"');
           }
       } catch (e: any) {
           setError(e.message);
@@ -69,7 +68,6 @@ export const Dashboard: React.FC = () => {
           if(logs.length > 0) alert(`Update failed: ${e.message}`);
       } finally {
           setIsRefreshing(false);
-          setIsLoading(false);
       }
   };
 
@@ -90,7 +88,18 @@ export const Dashboard: React.FC = () => {
   const recentLogs = logs.slice(0, 5);
 
   return (
-    <div className="space-y-6 pb-20 animate-fade-in">
+    <div className="space-y-6 pb-20 animate-fade-in relative min-h-screen">
+      
+      {/* Loading Overlay for Manual Refresh */}
+      {isRefreshing && logs.length > 0 && (
+          <div className="absolute inset-0 bg-white/50 dark:bg-black/20 z-10 flex items-start justify-center pt-20 backdrop-blur-[1px] rounded-3xl">
+              <div className="bg-white dark:bg-gray-800 px-6 py-3 rounded-full shadow-xl flex items-center gap-3 border border-gray-100 dark:border-gray-700 animate-slide-up">
+                  <Loader2 className="animate-spin text-pastel-blueDark" size={20} />
+                  <span className="font-medium text-sm text-gray-700 dark:text-gray-200">กำลังอัปเดตข้อมูล...</span>
+              </div>
+          </div>
+      )}
+
       <header className="flex justify-between items-start mb-2">
         <div>
             <h1 className="text-3xl font-bold text-gray-800 dark:text-white">ภาพรวมระบบ (Dashboard)</h1>
@@ -99,7 +108,7 @@ export const Dashboard: React.FC = () => {
         <button 
             onClick={handleManualRefresh} 
             disabled={isRefreshing}
-            className="p-2 bg-gray-100 dark:bg-gray-700 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+            className="p-2 bg-gray-100 dark:bg-gray-700 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors shadow-sm"
         >
             <RefreshCw size={20} className={`text-gray-500 dark:text-gray-300 ${isRefreshing ? 'animate-spin' : ''}`} />
         </button>
@@ -156,12 +165,18 @@ export const Dashboard: React.FC = () => {
           </div>
       ) : logs.length === 0 && !error ? (
           <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700">
-             <AlertTriangle size={48} className="mx-auto text-gray-300 mb-4" />
+             <div className="bg-gray-50 dark:bg-gray-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
+                <AlertTriangle size={32} className="text-gray-300" />
+             </div>
              <h3 className="text-lg font-bold text-gray-700 dark:text-gray-200">ไม่พบข้อมูลการตรวจสอบ</h3>
-             <p className="text-sm text-gray-500 mb-6">ยังไม่มีข้อมูลใน Sheet "QC_Logs" หรือการเชื่อมต่อมีปัญหา</p>
+             <p className="text-sm text-gray-500 mb-6 max-w-xs mx-auto">
+                เชื่อมต่อสำเร็จ แต่ยังไม่มีข้อมูลใน Sheet "QC_Logs" 
+                <br/><br/>
+                <span className="text-xs bg-yellow-50 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400 px-2 py-1 rounded">Tip: ตรวจสอบว่าใน Google Sheet มีแท็บชื่อ "QC_Logs" หรือไม่</span>
+             </p>
              <button 
                 onClick={handleManualRefresh}
-                className="bg-pastel-blueDark text-white px-6 py-2 rounded-xl text-sm font-bold shadow-sm"
+                className="bg-pastel-blueDark text-white px-6 py-2 rounded-xl text-sm font-bold shadow-sm hover:bg-sky-800 transition-colors"
             >
                 ลองโหลดใหม่ (Force Refresh)
             </button>

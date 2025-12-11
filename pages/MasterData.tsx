@@ -171,7 +171,18 @@ export const MasterData: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6 pb-24 md:pb-0 animate-fade-in relative">
+    <div className="space-y-6 pb-24 md:pb-0 animate-fade-in relative min-h-screen">
+      
+      {/* Loading Overlay */}
+      {isRefreshing && products.length > 0 && (
+          <div className="absolute inset-0 bg-white/50 dark:bg-black/20 z-20 flex items-start justify-center pt-32 backdrop-blur-[1px]">
+              <div className="bg-white dark:bg-gray-800 px-6 py-3 rounded-full shadow-xl flex items-center gap-3 border border-gray-100 dark:border-gray-700 animate-slide-up">
+                  <Loader2 className="animate-spin text-pastel-blueDark" size={20} />
+                  <span className="font-medium text-sm text-gray-700 dark:text-gray-200">กำลังอัปเดตข้อมูลสินค้า...</span>
+              </div>
+          </div>
+      )}
+
       {/* Header Section */}
       <div className="flex flex-col gap-4 bg-gradient-to-r from-pastel-blue to-white dark:from-gray-800 dark:to-gray-900 p-6 -mx-4 md:-mx-8 md:rounded-b-3xl shadow-sm border-b border-gray-100 dark:border-gray-700">
         <div className="flex justify-between items-start">
@@ -269,6 +280,14 @@ export const MasterData: React.FC = () => {
             <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-xs mx-auto">
                 ไม่พบข้อมูลใน Sheet "Scrap Crossborder" หรือนำเข้าจาก Excel
             </p>
+            <button 
+                onClick={() => loadData(true)}
+                disabled={isRefreshing}
+                className="flex items-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+                <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
+                <span>ดึงข้อมูลจาก Google Sheet</span>
+            </button>
         </div>
       ) : (
         // Desktop Table View

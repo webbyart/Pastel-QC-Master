@@ -89,7 +89,10 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                     if (text.includes('quota') || text.includes('exceeded')) {
                          throw new Error("The quota has been exceeded. Please wait a minute.");
                     }
-                    throw new Error("Connection Blocked: Please set 'Who has access' to 'Anyone' in your Script deployment.");
+                    if (text.includes('Google Drive') || text.includes('script.google.com')) {
+                        throw new Error("Script Permission Error: Set 'Who has access' to 'Anyone'.");
+                    }
+                    throw new Error("Connection Blocked: The server returned HTML instead of JSON.");
                 }
 
                 try {
@@ -97,6 +100,7 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                     if (json.error) throw new Error(json.error);
                     return json;
                 } catch (e) {
+                    console.error("JSON Parse Error:", text.substring(0, 100));
                     throw new Error("Invalid response format from Google Script");
                 }
             } catch (e: any) {
@@ -108,16 +112,17 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                     break;
                 }
 
-                // Wait before retry (Exponential backoff: 1s, 2s, 3s)
+                // Exponential Backoff: 1s, 2s, 4s
                 if (i < RETRIES - 1) {
-                    await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+                    const delay = 1000 * Math.pow(2, i);
+                    await new Promise(r => setTimeout(r, delay));
                 }
             }
         }
 
         console.error("API Error Final:", lastError);
         if (lastError.message === 'Failed to fetch' || lastError.message.includes('NetworkError')) {
-            throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
+            throw new Error("Connection Failed: Check internet or Script Permissions.");
         }
         throw lastError;
     };
@@ -261,11 +266,6 @@ export const deleteProduct = async (barcode: string) => {
   const url = getApiUrl();
   if (!url) return;
   
-  await callApi('deleteProduct', 'POST', { barcode }); // Changed to POST with body for consistency if script supports it, or URL param
-  // For safety with current script structure that might use GET param for delete:
-  // We keep the manual fetch for delete if the script expects GET param, but ideally standardize to POST
-  // Reverting to manual fetch to match script 'deleteProduct' using GET param 'barcode' in previous example, 
-  // or POST body in improved script. Let's use the safer manual fetch from previous working version:
   await fetch(`${url}?action=deleteProduct&barcode=${barcode}`, { 
       method: 'POST',
       mode: 'cors',

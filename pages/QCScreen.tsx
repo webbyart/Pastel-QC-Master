@@ -119,6 +119,8 @@ export const QCScreen: React.FC = () => {
     if (showScanner) {
         // Short delay to ensure DOM is ready
         const timer = setTimeout(() => {
+            if (!document.getElementById('reader')) return;
+
             const scanner = new Html5QrcodeScanner(
                 "reader",
                 { 
@@ -132,7 +134,9 @@ export const QCScreen: React.FC = () => {
             
             scanner.render(
                 (decodedText) => {
-                    scanner.clear().catch(e => console.error("Failed to clear", e));
+                    try {
+                        scanner.clear().catch(e => console.error("Failed to clear on success", e));
+                    } catch(e) {}
                     setShowScanner(false);
                     setBarcode(decodedText);
                     processBarcode(decodedText);
@@ -142,10 +146,13 @@ export const QCScreen: React.FC = () => {
                 }
             );
             
-            // Cleanup when component unmounts or scanner closes
+            // Cleanup function using closure to reference the specific scanner instance
             return () => {
                  try {
-                     scanner.clear().catch(e => console.error("Failed to clear", e));
+                     scanner.clear().catch(e => {
+                         // Common error when scanner isn't fully started yet or already cleared
+                         // console.warn("Scanner cleanup warning:", e);
+                     });
                  } catch (e) {
                      // ignore
                  }
