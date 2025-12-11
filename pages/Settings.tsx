@@ -2,10 +2,223 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
-import { getUsers, saveUser, deleteUser, getApiUrl, setApiUrl, testApiConnection, clearCache } from '../services/db';
+import { getUsers, saveUser, deleteUser, getApiUrl, setApiUrl, testApiConnection, testMasterDataAccess, testQCLogAccess, clearCache, setupGoogleSheet } from '../services/db';
 import { User } from '../types';
-import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box, Link, Check, AlertCircle, CheckCircle, RefreshCw, HelpCircle, AlertTriangle, Database } from 'lucide-react';
+import { LogOut, Moon, Sun, User as UserIcon, Plus, Trash2, Edit2, X, Box, Link, Check, AlertCircle, CheckCircle, RefreshCw, HelpCircle, AlertTriangle, Database, Server, FileText, TableProperties, Play, Code, Copy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+
+const GOOGLE_SCRIPT_CODE = `
+// --- CONFIGURATION ---
+const CONFIG = {
+  // Exact Sheet Names
+  sheet_master: 'Scrap Crossborder', 
+  sheet_logs: 'QC_Logs',
+  
+  // Column Mapping (JSON Key -> Sheet Header)
+  // This allows the Frontend to send specific keys, and we map them to headers
+  headers: {
+    // Common
+    'lotNo': 'Lot no.',
+    'productType': 'Type',
+    'barcode': 'RMS Return Item ID',
+    'productName': 'Product Name',
+    'unitPrice': 'Product unit price',
+    'costPrice': 'ต้นทุน',
+    'sellingPrice': 'ราคาขาย',
+    
+    // QC Specific
+    'reason': 'Comment',
+    'remark': 'Remark',
+    'inspectorId': 'Inspector',
+    'timestamp': 'Timestamp',
+    'imageUrls': 'Images'
+  }
+};
+
+function doGet(e) { return handleRequest(e); }
+function doPost(e) { return handleRequest(e); }
+
+function handleRequest(e) {
+  const lock = LockService.getScriptLock();
+  lock.tryLock(10000);
+
+  try {
+    // Handle both GET parameters and POST body
+    let action = e.parameter.action;
+    let payload = {};
+    
+    if (e.postData && e.postData.contents) {
+      const body = JSON.parse(e.postData.contents);
+      if (body.action) action = body.action;
+      payload = body;
+    }
+
+    if (!action) return response({ error: 'Missing action parameter' });
+
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // --- 1. GET PRODUCTS ---
+    if (action === 'getProducts') {
+      return response(readSheet(ss, CONFIG.sheet_master));
+    }
+
+    // --- 2. GET QC LOGS ---
+    if (action === 'getQCLogs') {
+      return response(readSheet(ss, CONFIG.sheet_logs));
+    }
+
+    // --- 3. SAVE QC RECORD (APPEND ONLY) ---
+    if (action === 'saveQC') {
+      saveRow(ss, CONFIG.sheet_logs, payload, false); // false = append
+      return response({ success: true });
+    }
+
+    // --- 4. SAVE PRODUCT (UPDATE OR APPEND) ---
+    if (action === 'saveProduct') {
+      // Use 'barcode' (RMS Return Item ID) as the unique key to update
+      saveRow(ss, CONFIG.sheet_master, payload, true, 'barcode'); 
+      return response({ success: true });
+    }
+
+    // --- 5. DELETE PRODUCT ---
+    if (action === 'deleteProduct') {
+      const barcode = e.parameter.barcode || payload.barcode;
+      deleteRow(ss, CONFIG.sheet_master, 'barcode', barcode);
+      return response({ success: true });
+    }
+
+    // --- 6. TEST CONNECTION ---
+    if (action === 'testConnection') {
+      return response({ success: true, message: 'Connection OK', time: new Date() });
+    }
+
+    return response({ error: 'Unknown action: ' + action });
+
+  } catch (err) {
+    return response({ error: err.toString() });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// --- HELPER FUNCTIONS ---
+
+function response(data) {
+  return ContentService.createTextOutput(JSON.stringify(data))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+// Read sheet data and convert to Array of Objects
+function readSheet(ss, sheetName) {
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return [];
+  
+  const data = sheet.getDataRange().getValues();
+  if (data.length < 2) return []; // No data
+  
+  const headers = data[0];
+  const rows = data.slice(1);
+  
+  // Create a reverse mapping (Header Name -> JSON Key) for reading
+  const reverseMap = {};
+  for (let key in CONFIG.headers) {
+    reverseMap[CONFIG.headers[key]] = key;
+  }
+
+  return rows.map((row, i) => {
+    let obj = { id: String(i) }; // Add row index as ID
+    headers.forEach((header, index) => {
+      // Use mapped key if exists, else use header name
+      const key = reverseMap[header] || header;
+      obj[key] = row[index];
+    });
+    return obj;
+  });
+}
+
+// Save data (Append or Update)
+function saveRow(ss, sheetName, data, allowUpdate, uniqueKeyField) {
+  let sheet = ss.getSheetByName(sheetName);
+  
+  // Create sheet if missing
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+  }
+
+  // Get or Create Headers
+  let headers = [];
+  if (sheet.getLastRow() === 0) {
+    // If empty, create headers based on config + any extra keys in data
+    const predefined = Object.values(CONFIG.headers);
+    headers = [...predefined];
+    sheet.appendRow(headers);
+  } else {
+    headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  }
+
+  // Prepare Row Data
+  const rowValues = headers.map(header => {
+    // Find which key maps to this header
+    let key = Object.keys(CONFIG.headers).find(k => CONFIG.headers[k] === header);
+    // If not found in map, try matching header directly (case insensitive)
+    if (!key) key = header;
+    
+    let val = data[key];
+    
+    // Fallback: check if data has the header name directly
+    if (val === undefined) val = data[header];
+    
+    // Handle Arrays (like images)
+    if (Array.isArray(val)) return JSON.stringify(val);
+    
+    return val === undefined || val === null ? '' : val;
+  });
+
+  // Update Logic
+  if (allowUpdate && uniqueKeyField && data[uniqueKeyField]) {
+    const allData = sheet.getDataRange().getValues();
+    const targetVal = String(data[uniqueKeyField]);
+    
+    // Find the column index for the unique key in the Sheet
+    // 1. Map uniqueKeyField ('barcode') -> Header Name ('RMS Return Item ID')
+    const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
+    const colIndex = headers.indexOf(headerName);
+    
+    if (colIndex > -1) {
+      for (let i = 1; i < allData.length; i++) {
+        if (String(allData[i][colIndex]) === targetVal) {
+          // Found match, update row
+          sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
+          return;
+        }
+      }
+    }
+  }
+
+  // Default: Append
+  sheet.appendRow(rowValues);
+}
+
+function deleteRow(ss, sheetName, uniqueKeyField, value) {
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return;
+  
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  
+  const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
+  const colIndex = headers.indexOf(headerName);
+  
+  if (colIndex === -1) return; // Column not found
+
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][colIndex]) === String(value)) {
+      sheet.deleteRow(i + 1);
+      return; 
+    }
+  }
+}
+`;
 
 export const Settings: React.FC = () => {
   const { user, logout } = useAuth();
@@ -17,13 +230,19 @@ export const Settings: React.FC = () => {
   const [showUserModal, setShowUserModal] = useState(false);
   const [editingUser, setEditingUser] = useState<Partial<User>>({});
   
+  // Script Modal
+  const [showScriptModal, setShowScriptModal] = useState(false);
+  
   // API URL State
   const [url, setUrl] = useState('');
-  const [savedUrl, setSavedUrl] = useState('');
   
-  // Test Connection State
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{success: boolean; message?: string; error?: string} | null>(null);
+  // Detailed Test State
+  const [testingStatus, setTestingStatus] = useState({
+      server: { status: 'idle', message: '' },
+      master: { status: 'idle', message: '' },
+      logs: { status: 'idle', message: '' }
+  });
+  const [isSettingUp, setIsSettingUp] = useState(false);
 
   useEffect(() => {
     if (user?.role === 'admin') {
@@ -31,7 +250,6 @@ export const Settings: React.FC = () => {
     }
     const current = getApiUrl();
     setUrl(current);
-    setSavedUrl(current);
   }, [user, showUserModal]);
 
   const handleSaveUser = (e: React.FormEvent) => {
@@ -56,23 +274,71 @@ export const Settings: React.FC = () => {
 
   const handleSaveUrl = () => {
       setApiUrl(url);
-      setSavedUrl(url);
       alert('บันทึก URL เรียบร้อยแล้ว');
-      // Clear previous test
-      setTestResult(null);
   };
 
-  const handleTestConnection = async () => {
-      if (!url) return;
-      setIsTesting(true);
-      setTestResult(null);
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(GOOGLE_SCRIPT_CODE);
+    alert("คัดลอกโค้ดแล้ว! นำไปวางใน Google Apps Script Editor");
+  };
+
+  const runDiagnostics = async () => {
+      if (!url) {
+          alert("กรุณาระบุ URL ก่อนเริ่มการทดสอบ");
+          return;
+      }
+      setApiUrl(url); 
+
+      setTestingStatus({
+          server: { status: 'loading', message: 'Pinging...' },
+          master: { status: 'loading', message: 'Checking...' },
+          logs: { status: 'loading', message: 'Checking...' }
+      });
+
+      // 1. Server Ping
+      const serverRes = await testApiConnection();
+      setTestingStatus(prev => ({
+          ...prev,
+          server: { status: serverRes.success ? 'success' : 'error', message: serverRes.success ? 'Connected' : serverRes.error || 'Failed' }
+      }));
+
+      // 2. Master Data & Logs
+      if (serverRes.success) {
+          testMasterDataAccess().then(res => {
+               setTestingStatus(prev => ({
+                  ...prev,
+                  master: { status: res.success ? 'success' : 'error', message: res.success ? `${res.count} Items` : res.error || 'Failed' }
+               }));
+          });
+
+          testQCLogAccess().then(res => {
+               setTestingStatus(prev => ({
+                  ...prev,
+                  logs: { status: res.success ? 'success' : 'error', message: res.success ? `${res.count} Logs` : res.error || 'Failed' }
+               }));
+          });
+      } else {
+          setTestingStatus(prev => ({
+              ...prev,
+              master: { status: 'error', message: 'Skipped' },
+              logs: { status: 'error', message: 'Skipped' }
+          }));
+      }
+  };
+
+  const handleSetupSheet = async () => {
+      if (!confirm('ระบบจะส่งข้อมูลทดสอบ 1 รายการเพื่อสร้าง Headers ใน Sheet "QC_Logs" หากยังไม่มีอยู่\n\nต้องการดำเนินการต่อหรือไม่?')) return;
       
-      // Save temporarily to test
-      setApiUrl(url);
-      
-      const result = await testApiConnection();
-      setTestResult(result);
-      setIsTesting(false);
+      setIsSettingUp(true);
+      try {
+          await setupGoogleSheet();
+          alert('ส่งข้อมูลทดสอบสำเร็จ! กรุณาตรวจสอบ Google Sheet ของคุณว่ามี Header ขึ้นหรือไม่');
+          runDiagnostics(); // Re-run tests
+      } catch (e: any) {
+          alert(`เกิดข้อผิดพลาด: ${e.message}`);
+      } finally {
+          setIsSettingUp(false);
+      }
   };
   
   const handleClearCache = () => {
@@ -81,6 +347,13 @@ export const Settings: React.FC = () => {
           alert('ล้างแคชเรียบร้อยแล้ว');
           window.location.reload();
       }
+  };
+
+  const getStatusIcon = (status: string) => {
+      if (status === 'loading') return <RefreshCw className="animate-spin text-blue-500" size={20} />;
+      if (status === 'success') return <CheckCircle className="text-green-500" size={20} />;
+      if (status === 'error') return <AlertCircle className="text-red-500" size={20} />;
+      return <div className="w-5 h-5 rounded-full border-2 border-gray-200" />;
   };
 
   return (
@@ -102,96 +375,126 @@ export const Settings: React.FC = () => {
           </div>
         </div>
 
-        {/* API Connection Settings */}
+        {/* API Connection & System Health */}
         <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
              <div className="p-4 border-b border-gray-100 dark:border-gray-700 font-semibold text-gray-500 dark:text-gray-400 text-sm uppercase tracking-wider flex items-center gap-2">
                 <Link size={16} />
-                เชื่อมต่อ Google Sheets (API)
+                เชื่อมต่อ Google Sheets (Connection)
             </div>
-            <div className="p-6">
-                <div className="mb-4 text-sm text-gray-500 dark:text-gray-400 bg-blue-50 dark:bg-blue-900/10 p-4 rounded-xl border border-blue-100 dark:border-blue-900/30">
-                    <p className="font-bold text-blue-700 dark:text-blue-300 mb-2 flex items-center gap-2"><HelpCircle size={16}/> ขั้นตอนการเชื่อมต่อ:</p>
-                    <ul className="list-disc list-inside space-y-1 ml-1">
-                        <li>สร้าง Google Apps Script ใน Sheet ของคุณ</li>
-                        <li>กด <strong>Deploy</strong> &gt; <strong>New deployment</strong></li>
-                        <li>เลือก type: <strong>Web app</strong></li>
-                        <li>Execute as: <strong>Me</strong> (อีเมลของคุณ)</li>
-                        <li>Who has access: <strong>Anyone</strong> (สำคัญมาก!)</li>
-                        <li>Copy URL มาวางในช่องด้านล่าง</li>
-                    </ul>
-                </div>
-
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Google Script Web App URL</label>
-                <div className="flex flex-col md:flex-row gap-3">
-                    <input 
-                        type="text" 
-                        value={url}
-                        onChange={(e) => setUrl(e.target.value)}
-                        placeholder="https://script.google.com/macros/s/.../exec"
-                        className="flex-1 p-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 focus:ring-2 focus:ring-pastel-blue outline-none dark:text-white font-mono text-sm"
-                    />
+            
+            <div className="p-6 space-y-6">
+                
+                {/* URL Input */}
+                <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Google Script Web App URL</label>
                     <div className="flex gap-2">
-                        <button 
-                            onClick={handleTestConnection}
-                            disabled={!url || isTesting}
-                            className={`px-4 py-3 rounded-xl font-bold transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap ${isTesting ? 'bg-gray-100 text-gray-400' : 'bg-orange-100 text-orange-600 hover:bg-orange-200'}`}
-                        >
-                            <RefreshCw size={18} className={isTesting ? 'animate-spin' : ''} />
-                            {isTesting ? 'กำลังทดสอบ...' : 'ทดสอบการเชื่อมต่อ'}
-                        </button>
+                        <input 
+                            type="text" 
+                            value={url}
+                            onChange={(e) => setUrl(e.target.value)}
+                            placeholder="https://script.google.com/macros/s/.../exec"
+                            className="flex-1 p-3 rounded-xl border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-900 focus:ring-2 focus:ring-pastel-blue outline-none dark:text-white font-mono text-sm"
+                        />
                         <button 
                             onClick={handleSaveUrl}
-                            className="bg-pastel-blueDark text-white px-6 py-3 rounded-xl font-bold hover:bg-sky-800 transition-colors flex items-center gap-2 shadow-sm whitespace-nowrap"
+                            className="bg-pastel-blueDark text-white px-4 py-3 rounded-xl font-bold hover:bg-sky-800 transition-colors shadow-sm"
                         >
-                            <Check size={18} />
-                            บันทึก
+                            <Check size={20} />
                         </button>
                     </div>
                 </div>
 
-                {/* Test Result Message */}
-                {testResult && (
-                    <div className={`mt-4 p-4 rounded-xl flex items-start gap-3 animate-slide-up ${testResult.success ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                        {testResult.success ? <CheckCircle className="flex-shrink-0 mt-0.5" /> : <AlertCircle className="flex-shrink-0 mt-0.5" />}
-                        <div>
-                            <p className="font-bold">{testResult.success ? 'การเชื่อมต่อสำเร็จ!' : 'เชื่อมต่อล้มเหลว'}</p>
-                            <p className="text-sm mt-1 opacity-90">{testResult.message || testResult.error}</p>
+                {/* System Health Dashboard */}
+                <div>
+                    <div className="flex justify-between items-end mb-3">
+                        <h3 className="font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                            <Server size={18} className="text-gray-500"/>
+                            สถานะการเชื่อมต่อ (System Health)
+                        </h3>
+                        <button 
+                            onClick={runDiagnostics}
+                            className="text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 text-gray-700 dark:text-gray-300 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 transition-colors"
+                        >
+                            <RefreshCw size={12} className={testingStatus.server.status === 'loading' ? 'animate-spin' : ''} />
+                            ทดสอบทั้งหมด
+                        </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {/* Server Status */}
+                        <div className={`p-4 rounded-xl border transition-all ${testingStatus.server.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-gray-50 dark:bg-gray-700/50 border-gray-100 dark:border-gray-600'}`}>
+                            <div className="flex justify-between items-start mb-2">
+                                <span className="text-xs font-bold text-gray-500 uppercase">Server Status</span>
+                                {getStatusIcon(testingStatus.server.status)}
+                            </div>
+                            <p className="font-semibold text-gray-800 dark:text-white text-sm">Ping Google Script</p>
+                            <p className="text-xs text-gray-500 mt-1 truncate">{testingStatus.server.message || 'Ready'}</p>
+                        </div>
+
+                        {/* Product Sheet Status */}
+                        <div className={`p-4 rounded-xl border transition-all ${testingStatus.master.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-blue-50 dark:bg-blue-900/10 border-blue-100 dark:border-blue-900/30'}`}>
+                            <div className="flex justify-between items-start mb-2">
+                                <span className="text-xs font-bold text-blue-500 uppercase">Product Sheet</span>
+                                {getStatusIcon(testingStatus.master.status)}
+                            </div>
+                            <p className="font-semibold text-gray-800 dark:text-white text-sm">Scrap Crossborder</p>
+                            <p className="text-xs text-gray-500 mt-1 truncate">{testingStatus.master.message || 'Ready'}</p>
+                        </div>
+
+                        {/* Logs Sheet Status */}
+                        <div className={`p-4 rounded-xl border transition-all ${testingStatus.logs.status === 'error' ? 'bg-red-50 border-red-200' : 'bg-purple-50 dark:bg-purple-900/10 border-purple-100 dark:border-purple-900/30'}`}>
+                            <div className="flex justify-between items-start mb-2">
+                                <span className="text-xs font-bold text-purple-500 uppercase">QC Logs Sheet</span>
+                                {getStatusIcon(testingStatus.logs.status)}
+                            </div>
+                            <p className="font-semibold text-gray-800 dark:text-white text-sm">QC_Logs</p>
+                            <p className="text-xs text-gray-500 mt-1 truncate">{testingStatus.logs.message || 'Ready'}</p>
                         </div>
                     </div>
-                )}
+                </div>
                 
-                {/* Troubleshooting Guide (Only Show on Error) */}
-                {testResult && !testResult.success && (
-                    <div className="mt-4 p-4 rounded-xl bg-gray-50 dark:bg-gray-700 border-2 border-dashed border-gray-200 dark:border-gray-600 animate-slide-up">
-                        <h4 className="font-bold text-gray-800 dark:text-white flex items-center gap-2 mb-3">
-                            <AlertTriangle className="text-orange-500" size={20}/>
-                            แนวทางแก้ไขปัญหา (Troubleshooting)
-                        </h4>
-                        <div className="space-y-3 text-sm text-gray-600 dark:text-gray-300">
-                             <div className="flex gap-3">
-                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">1</div>
-                                 <div>
-                                     <p className="font-semibold text-gray-800 dark:text-white">สิทธิ์การเข้าถึง (Who has access)</p>
-                                     <p>ต้องตั้งค่าเป็น <strong>"Anyone" (ทุกคน)</strong> เท่านั้น หากตั้งเป็น "Anyone with Google Account" หรือ "Only me" ระบบจะไม่สามารถดึงข้อมูลได้</p>
-                                 </div>
-                             </div>
-                             <div className="flex gap-3">
-                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">2</div>
-                                 <div>
-                                     <p className="font-semibold text-gray-800 dark:text-white">การ Deploy ใหม่</p>
-                                     <p>หากมีการแก้ไขโค้ดใน Script Editor ต้องกด <strong>Deploy &gt; New deployment</strong> ทุกครั้ง เพื่อให้โค้ดใหม่เริ่มทำงาน</p>
-                                 </div>
-                             </div>
-                             <div className="flex gap-3">
-                                 <div className="bg-white dark:bg-gray-800 w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shadow-sm">3</div>
-                                 <div>
-                                     <p className="font-semibold text-gray-800 dark:text-white">URL ถูกต้องหรือไม่?</p>
-                                     <p>URL ต้องลงท้ายด้วย <code>/exec</code> เสมอ ตรวจสอบว่าไม่มีตัวอักษรอื่นต่อท้าย</p>
-                                 </div>
-                             </div>
+                {/* Setup Helper & Script View */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-900/30 p-4 rounded-xl flex flex-col justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                            <TableProperties className="text-yellow-600 dark:text-yellow-500 mt-1 flex-shrink-0" size={20} />
+                            <div>
+                                <h4 className="font-bold text-yellow-800 dark:text-yellow-500 text-sm">Setup Google Sheet</h4>
+                                <p className="text-xs text-yellow-700 dark:text-yellow-600 mt-1">
+                                    สร้าง Headers ใน Sheet "QC_Logs" อัตโนมัติ (ส่งข้อมูลทดสอบ 1 แถว)
+                                </p>
+                            </div>
                         </div>
+                        <button 
+                            onClick={handleSetupSheet}
+                            disabled={isSettingUp}
+                            className="w-full bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-2"
+                        >
+                            {isSettingUp ? <RefreshCw size={14} className="animate-spin"/> : <Play size={14} />}
+                            Initialize Columns
+                        </button>
                     </div>
-                )}
+
+                    <div className="bg-gray-100 dark:bg-gray-700/30 border border-gray-200 dark:border-gray-600 p-4 rounded-xl flex flex-col justify-between gap-4">
+                        <div className="flex items-start gap-3">
+                            <Code className="text-gray-600 dark:text-gray-400 mt-1 flex-shrink-0" size={20} />
+                            <div>
+                                <h4 className="font-bold text-gray-800 dark:text-white text-sm">Google Apps Script</h4>
+                                <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                                    รับโค้ด Script ล่าสุดเพื่อแก้ไขปัญหา "Invalid Format"
+                                </p>
+                            </div>
+                        </div>
+                        <button 
+                            onClick={() => setShowScriptModal(true)}
+                            className="w-full bg-gray-700 hover:bg-gray-800 dark:bg-gray-600 dark:hover:bg-gray-500 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center justify-center gap-2"
+                        >
+                            <FileText size={14} />
+                            View Google Script Code
+                        </button>
+                    </div>
+                </div>
+
             </div>
         </div>
 
@@ -353,6 +656,39 @@ export const Settings: React.FC = () => {
                         บันทึกข้อมูล
                     </button>
                 </form>
+            </div>
+        </div>
+      )}
+
+      {/* Script Code Modal */}
+      {showScriptModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setShowScriptModal(false)} />
+            <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-2xl shadow-2xl animate-slide-up flex flex-col h-[80vh]">
+                <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800 rounded-t-2xl">
+                    <div>
+                        <h3 className="font-bold text-lg text-gray-800 dark:text-white flex items-center gap-2">
+                            <Code className="text-blue-500" /> 
+                            Google Apps Script Code
+                        </h3>
+                        <p className="text-xs text-gray-500">Copy this code to your Google Apps Script project</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={handleCopyCode}
+                            className="px-3 py-1.5 bg-blue-500 text-white text-xs font-bold rounded-lg hover:bg-blue-600 transition-colors flex items-center gap-1"
+                        >
+                            <Copy size={12} /> Copy Code
+                        </button>
+                        <button onClick={() => setShowScriptModal(false)} className="p-1.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-gray-500"><X size={20} /></button>
+                    </div>
+                </div>
+                
+                <div className="flex-1 overflow-auto p-0 bg-[#1e1e1e]">
+                    <pre className="p-4 text-xs font-mono text-gray-300 leading-relaxed whitespace-pre-wrap select-all">
+                        {GOOGLE_SCRIPT_CODE}
+                    </pre>
+                </div>
             </div>
         </div>
       )}

@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList, ImageIcon } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
@@ -121,7 +121,7 @@ export const Report: React.FC = () => {
             <FileText className="text-pastel-purpleDark" />
             รายงาน (Reports)
           </h1>
-          <p className="text-gray-500 dark:text-gray-400">ประวัติการตรวจสอบคุณภาพสินค้า</p>
+          <p className="text-gray-500 dark:text-gray-400">ประวัติการตรวจสอบคุณภาพสินค้า (QC Logs)</p>
         </div>
         
         <div className="flex gap-2">
@@ -245,13 +245,16 @@ export const Report: React.FC = () => {
                 <tr>
                   <th className="p-4 pl-6">Lot no.</th>
                   <th className="p-4">Type</th>
-                  <th className="p-4">RMS ID</th>
+                  <th className="p-4">RMS Return Item ID</th>
                   <th className="p-4">Product Name</th>
-                  <th className="p-4">Unit Price</th>
+                  <th className="p-4">Product unit price</th>
                   <th className="p-4">ต้นทุน</th>
                   <th className="p-4">ราคาขาย</th>
                   <th className="p-4">Comment</th>
                   <th className="p-4">Remark</th>
+                  <th className="p-4">Inspector</th>
+                  <th className="p-4">Timestamp</th>
+                  <th className="p-4 text-center">Images</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
@@ -259,21 +262,36 @@ export const Report: React.FC = () => {
                   <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
                     <td className="p-4 pl-6 text-sm text-gray-600 dark:text-gray-300">{log.lotNo || '-'}</td>
                     <td className="p-4 text-sm text-gray-600 dark:text-gray-300">{log.productType || '-'}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">{log.rmsId || '-'}</td>
+                    <td className="p-4 text-sm font-mono text-gray-600 dark:text-gray-300">{log.rmsId || '-'}</td>
                     <td className="p-4">
                       <p className="font-medium text-gray-800 dark:text-white">{log.productName}</p>
-                      <p className="text-xs text-gray-400 font-mono">{log.barcode}</p>
                     </td>
                     <td className="p-4 text-sm text-gray-600 dark:text-gray-300">฿{(log.unitPrice || 0).toLocaleString()}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">฿{log.costPrice.toFixed(2)}</td>
-                    <td className="p-4 text-sm font-bold text-gray-800 dark:text-white">฿{log.sellingPrice.toFixed(2)}</td>
+                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">฿{(log.costPrice || 0).toFixed(2)}</td>
+                    <td className="p-4 text-sm font-bold text-gray-800 dark:text-white">฿{(log.sellingPrice || 0).toFixed(2)}</td>
                     <td className="p-4 text-sm text-gray-600 dark:text-gray-300 max-w-xs truncate">{log.reason || '-'}</td>
                     <td className="p-4 text-sm text-gray-600 dark:text-gray-300 max-w-xs truncate">{log.remark || '-'}</td>
+                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">{log.inspectorId}</td>
+                    <td className="p-4 text-sm text-gray-500 dark:text-gray-400 text-xs">
+                        {new Date(log.timestamp).toLocaleString('th-TH', { 
+                            dateStyle: 'short', 
+                            timeStyle: 'short' 
+                        })}
+                    </td>
+                    <td className="p-4 text-center">
+                        {log.imageUrls.length > 0 ? (
+                            <span className="inline-flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs font-bold">
+                                <ImageIcon size={12} /> {log.imageUrls.length}
+                            </span>
+                        ) : (
+                            <span className="text-gray-300">-</span>
+                        )}
+                    </td>
                   </tr>
                 ))}
                 {filteredLogs.length === 0 && (
                   <tr>
-                    <td colSpan={9} className="p-12 text-center text-gray-400">
+                    <td colSpan={12} className="p-12 text-center text-gray-400">
                       <div className="flex flex-col items-center">
                           <ClipboardList size={32} className="mb-2 opacity-20" />
                           <p>{logs.length === 0 ? 'ยังไม่มีรายการตรวจสอบ' : 'ไม่พบข้อมูลตามเงื่อนไขที่กำหนด'}</p>
@@ -323,17 +341,23 @@ export const Report: React.FC = () => {
                                 Type: {log.productType}
                              </span>
                         )}
+                        <span className="flex items-center gap-1 bg-purple-50 dark:bg-purple-900/20 px-2 py-1 rounded-md text-xs text-purple-600 dark:text-purple-300">
+                            <User size={12} /> {log.inspectorId}
+                        </span>
                     </div>
 
                     {/* Price and Reason Section */}
                     <div className="flex justify-between items-end pt-3 border-t border-gray-50 dark:border-gray-700/50 border-dashed">
                         <div>
                            <p className="text-xs text-gray-400 mb-0.5">ราคาขาย</p>
-                           <p className="text-xl font-bold text-gray-800 dark:text-white">฿{log.sellingPrice.toLocaleString()}</p>
+                           <p className="text-xl font-bold text-gray-800 dark:text-white">฿{(log.sellingPrice || 0).toLocaleString()}</p>
                         </div>
                         <div className="flex-1 ml-6 text-right">
                            {log.reason && <p className="text-xs text-gray-600 dark:text-gray-300 italic truncate max-w-[150px] ml-auto">"{log.reason}"</p>}
                            {log.remark && <p className="text-xs text-gray-400 truncate max-w-[150px] ml-auto">Remark: {log.remark}</p>}
+                           <p className="text-[10px] text-gray-300 mt-1">
+                               {new Date(log.timestamp).toLocaleTimeString('th-TH')}
+                           </p>
                         </div>
                     </div>
                  </div>
