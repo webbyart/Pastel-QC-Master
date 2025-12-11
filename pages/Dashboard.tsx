@@ -2,21 +2,46 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
-import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2 } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { QCStatus, QCRecord } from '../types';
+import { useNavigate } from 'react-router-dom';
 
 export const Dashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [logs, setLogs] = useState<QCRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
+  // Optimized Loading Strategy:
+  // 1. Load from cache immediately (isLoading becomes false fast)
+  // 2. Fetch fresh data in background (isRefreshing true)
   useEffect(() => {
     const init = async () => {
-        const data = await fetchQCLogs();
-        setLogs(data);
+        // Step 1: Get cached data first for instant UI
+        const cachedData = await fetchQCLogs(false);
+        setLogs(cachedData);
         setIsLoading(false);
+
+        // Step 2: Fetch fresh data in background
+        setIsRefreshing(true);
+        try {
+            const freshData = await fetchQCLogs(true);
+            setLogs(freshData);
+        } catch (e) {
+            console.error("Background refresh failed", e);
+        } finally {
+            setIsRefreshing(false);
+        }
     };
     init();
   }, []);
+
+  const handleManualRefresh = async () => {
+      setIsRefreshing(true);
+      const data = await fetchQCLogs(true);
+      setLogs(data);
+      setIsRefreshing(false);
+  };
 
   const stats = useMemo(() => {
     return {
@@ -34,21 +59,58 @@ export const Dashboard: React.FC = () => {
 
   const recentLogs = logs.slice(0, 5);
 
-  if (isLoading) {
-      return (
-          <div className="flex justify-center items-center h-[60vh]">
-              <Loader2 className="animate-spin text-pastel-blueDark" size={40} />
-          </div>
-      )
-  }
-
   return (
-    <div className="space-y-6 pb-20">
-      <header className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-800 dark:text-white">ภาพรวมระบบ (Dashboard)</h1>
-        <p className="text-gray-500 dark:text-gray-400">สรุปผลการตรวจสอบคุณภาพสินค้า</p>
+    <div className="space-y-6 pb-20 animate-fade-in">
+      <header className="flex justify-between items-start mb-2">
+        <div>
+            <h1 className="text-3xl font-bold text-gray-800 dark:text-white">ภาพรวมระบบ (Dashboard)</h1>
+            <p className="text-gray-500 dark:text-gray-400">สรุปผลการตรวจสอบคุณภาพสินค้า</p>
+        </div>
+        <button 
+            onClick={handleManualRefresh} 
+            disabled={isRefreshing}
+            className="p-2 bg-gray-100 dark:bg-gray-700 rounded-full hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+        >
+            <RefreshCw size={20} className={`text-gray-500 dark:text-gray-300 ${isRefreshing ? 'animate-spin' : ''}`} />
+        </button>
       </header>
+    
+      {/* Quick Access Section */}
+      <div className="grid grid-cols-2 gap-4">
+        <button 
+            onClick={() => navigate('/qc')}
+            className="flex items-center justify-between p-5 rounded-2xl bg-gradient-to-r from-pastel-blueDark to-blue-600 text-white shadow-lg shadow-blue-500/30 transform active:scale-95 transition-all group"
+        >
+            <div className="text-left">
+                <p className="font-bold text-lg">เริ่มตรวจสอบ</p>
+                <p className="text-blue-100 text-xs">Start QC Scan</p>
+            </div>
+            <div className="bg-white/20 p-3 rounded-xl group-hover:scale-110 transition-transform">
+                <ScanLine size={24} />
+            </div>
+        </button>
 
+        <button 
+            onClick={() => navigate('/report')}
+            className="flex items-center justify-between p-5 rounded-2xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 shadow-sm hover:shadow-md transform active:scale-95 transition-all group"
+        >
+            <div className="text-left">
+                <p className="font-bold text-lg text-gray-800 dark:text-white">ดูรายงาน</p>
+                <p className="text-gray-400 text-xs">View Report</p>
+            </div>
+            <div className="bg-pastel-purple p-3 rounded-xl group-hover:scale-110 transition-transform">
+                <FileSpreadsheet size={24} className="text-pastel-purpleDark" />
+            </div>
+        </button>
+      </div>
+
+      {isLoading && logs.length === 0 ? (
+          <div className="flex flex-col justify-center items-center h-[40vh] space-y-4">
+              <Loader2 className="animate-spin text-pastel-blueDark" size={40} />
+              <p className="text-gray-400 animate-pulse">กำลังโหลดข้อมูล...</p>
+          </div>
+      ) : (
+      <>
       {/* Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col">
@@ -131,6 +193,8 @@ export const Dashboard: React.FC = () => {
             </div>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

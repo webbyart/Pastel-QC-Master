@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link } from 'lucide-react';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const MasterData: React.FC = () => {
@@ -12,6 +12,7 @@ export const MasterData: React.FC = () => {
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [hasApiUrl, setHasApiUrl] = useState(true);
   
   // Modal State
@@ -23,19 +24,35 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData();
+    loadData(false);
   }, []);
 
-  const loadData = async () => {
-    setIsLoading(true);
+  const loadData = async (forceUpdate = false) => {
     if (!getApiUrl()) {
         setHasApiUrl(false);
         setIsLoading(false);
         return;
     }
-    const data = await fetchMasterData();
-    setProducts(data);
-    setIsLoading(false);
+    
+    // 1. Instant Cache
+    if (!forceUpdate) {
+        const cached = await fetchMasterData(false);
+        setProducts(cached);
+        setIsLoading(false);
+    } else {
+        setIsRefreshing(true);
+    }
+    
+    // 2. Background Sync
+    try {
+        const fresh = await fetchMasterData(true);
+        setProducts(fresh);
+        setIsLoading(false);
+    } catch(e) {
+        console.error(e);
+    } finally {
+        setIsRefreshing(false);
+    }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -48,7 +65,7 @@ export const MasterData: React.FC = () => {
         setImportProgress(100);
         
         setTimeout(() => {
-            loadData();
+            loadData(true); // Force refresh after import
             setIsImporting(false);
             setImportProgress(0);
             alert(`✨ นำเข้าข้อมูลสำเร็จ ${count} รายการ!`);
@@ -69,7 +86,7 @@ export const MasterData: React.FC = () => {
   const confirmDelete = async () => {
     if (deleteId) {
         await deleteProduct(deleteId);
-        await loadData();
+        setProducts(products.filter(p => p.barcode !== deleteId)); // Optimistic UI
         setDeleteId(null);
     }
   };
@@ -111,8 +128,7 @@ export const MasterData: React.FC = () => {
         productType: editingProduct.productType
     });
     setShowModal(false);
-    await loadData();
-    setIsLoading(false);
+    loadData(true); // Force refresh
   };
 
   const filtered = products.filter(p => 
@@ -168,6 +184,14 @@ export const MasterData: React.FC = () => {
                 <span>นำเข้า Excel</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
             </label>
+            <button 
+                onClick={() => loadData(true)}
+                disabled={isRefreshing}
+                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95"
+            >
+                <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
+                <span>อัปเดต</span>
+            </button>
         </div>
 
         {/* Import Progress Bar */}
@@ -197,10 +221,10 @@ export const MasterData: React.FC = () => {
       </div>
 
       {/* Content Area */}
-      {isLoading ? (
+      {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark mb-4" />
-              <p>กำลังเชื่อมต่อ Google Sheet...</p>
+              <p>กำลังโหลดข้อมูล...</p>
           </div>
       ) : filtered.length === 0 ? (
         // Empty State

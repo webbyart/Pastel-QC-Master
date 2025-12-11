@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterData, saveQCRecord, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye, ChevronDown, QrCode, Link, Loader2 } from 'lucide-react';
+import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye, ChevronDown, QrCode, Link, Loader2, RefreshCw } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 const REASON_OPTIONS = [
@@ -28,6 +28,7 @@ export const QCScreen: React.FC = () => {
   // Data Cache
   const [cachedProducts, setCachedProducts] = useState<ProductMaster[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [hasApiUrl, setHasApiUrl] = useState(true);
   
@@ -60,9 +61,22 @@ export const QCScreen: React.FC = () => {
             setIsLoading(false);
             return;
         }
-        const data = await fetchMasterData();
+        
+        // 1. Instant Cache Load
+        const data = await fetchMasterData(false);
         setCachedProducts(data);
         setIsLoading(false);
+
+        // 2. Background Refresh
+        setIsRefreshing(true);
+        try {
+            const freshData = await fetchMasterData(true);
+            setCachedProducts(freshData);
+        } catch(e) {
+            console.error(e);
+        } finally {
+            setIsRefreshing(false);
+        }
     };
     init();
   }, []);
@@ -76,8 +90,6 @@ export const QCScreen: React.FC = () => {
         if (needsReason && reasonRef.current) {
             setTimeout(() => reasonRef.current?.focus(), 100);
         }
-        // Focus RMS ID on entry if not filled? No, usually focus Selling Price or first editable field
-        // But if RMS ID is the "Scan" key, it's already filled.
     }
   }, [status, sellingPrice, step]);
 
@@ -199,7 +211,7 @@ export const QCScreen: React.FC = () => {
 
   const isCriticalCondition = status === QCStatus.DAMAGE || (parseFloat(sellingPrice) === 0 && sellingPrice !== '');
 
-  if (isLoading) {
+  if (isLoading && cachedProducts.length === 0) {
       return <div className="flex justify-center items-center h-[60vh]"><Loader2 className="animate-spin text-pastel-blueDark" size={40} /></div>;
   }
 
@@ -219,13 +231,20 @@ export const QCScreen: React.FC = () => {
   return (
     <div className="max-w-2xl mx-auto pb-24 md:pb-0">
       {step === 'scan' ? (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-fade-in">
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-8 animate-fade-in relative">
+          
+          {isRefreshing && (
+             <div className="absolute top-0 right-0 p-2 bg-gray-100 rounded-full animate-pulse">
+                <RefreshCw size={16} className="animate-spin text-gray-500"/>
+             </div>
+          )}
+
           <div className="p-6 bg-pastel-blue rounded-full">
             <Scan size={64} className="text-pastel-blueDark" />
           </div>
           <div className="text-center">
             <h2 className="text-2xl font-bold text-gray-800 dark:text-white">สแกนสินค้า (RMS ID)</h2>
-            <p className="text-gray-500">พร้อมใช้งาน (Cached {cachedProducts.length} items)</p>
+            <p className="text-gray-500">พร้อมใช้งาน ({cachedProducts.length} items)</p>
           </div>
           
           <form onSubmit={handleScan} className="w-full max-w-md relative">

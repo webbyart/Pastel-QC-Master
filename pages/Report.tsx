@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
@@ -24,13 +24,29 @@ export const Report: React.FC = () => {
   const comments = Array.from(new Set(logs.map(l => l.reason).filter(r => r && r.trim() !== ''))).sort();
 
   useEffect(() => {
-    const init = async () => {
-        const data = await fetchQCLogs();
-        setLogs(data);
-        setIsLoading(false);
-    }
-    init();
+    loadData(false);
   }, []);
+
+  const loadData = async (forceUpdate = false) => {
+      // 1. Load from cache first
+      if (!forceUpdate) {
+        const cached = await fetchQCLogs(false);
+        setLogs(cached);
+        setIsLoading(false);
+      } else {
+        setIsLoading(true);
+      }
+
+      // 2. Fetch fresh
+      try {
+          const fresh = await fetchQCLogs(true);
+          setLogs(fresh);
+      } catch(e) {
+          console.error(e);
+      } finally {
+          setIsLoading(false);
+      }
+  };
 
   useEffect(() => {
     let result = logs;
@@ -102,24 +118,32 @@ export const Report: React.FC = () => {
           <p className="text-gray-500 dark:text-gray-400">ประวัติการตรวจสอบคุณภาพสินค้า</p>
         </div>
         
-        <button 
-           onClick={handleExport}
-           disabled={isExporting || isLoading}
-           className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting || isLoading ? 'cursor-not-allowed opacity-70' : ''}`}
-        >
-           {isExporting && (
-               <div className="absolute inset-0 bg-green-700/50">
-                   <div 
-                      className="h-full bg-green-600 transition-all duration-100 ease-linear" 
-                      style={{ width: `${exportProgress}%` }} 
-                   />
-               </div>
-           )}
-           <div className="relative z-10 flex items-center gap-2">
-               {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-               <span className="font-medium">{isExporting ? `กำลังส่งออก ${exportProgress}%` : 'ส่งออก Excel'}</span>
-           </div>
-        </button>
+        <div className="flex gap-2">
+            <button 
+                onClick={() => loadData(true)}
+                className="flex items-center justify-center p-3 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm text-gray-600 dark:text-gray-300"
+            >
+                <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
+            </button>
+            <button 
+            onClick={handleExport}
+            disabled={isExporting || isLoading}
+            className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting || isLoading ? 'cursor-not-allowed opacity-70' : ''}`}
+            >
+            {isExporting && (
+                <div className="absolute inset-0 bg-green-700/50">
+                    <div 
+                        className="h-full bg-green-600 transition-all duration-100 ease-linear" 
+                        style={{ width: `${exportProgress}%` }} 
+                    />
+                </div>
+            )}
+            <div className="relative z-10 flex items-center gap-2">
+                {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
+                <span className="font-medium">{isExporting ? `กำลังส่งออก ${exportProgress}%` : 'ส่งออก Excel'}</span>
+            </div>
+            </button>
+        </div>
       </header>
 
       {/* Filter Bar */}
@@ -203,7 +227,7 @@ export const Report: React.FC = () => {
 
       {/* List Container */}
       <div className="animate-slide-up">
-        {isLoading ? (
+        {isLoading && logs.length === 0 ? (
             <div className="flex justify-center p-12"><Loader2 className="animate-spin text-pastel-blueDark" size={32} /></div>
         ) : (
         <>

@@ -5,12 +5,15 @@ import * as XLSX from 'xlsx';
 // Storage Keys
 const KEYS = {
   USERS: 'qc_users',
-  API_URL: 'qc_api_url'
+  API_URL: 'qc_api_url',
+  CACHE_MASTER: 'qc_cache_master',
+  CACHE_LOGS: 'qc_cache_logs',
+  CACHE_TIMESTAMP: 'qc_cache_time'
 };
 
 // --- CONFIGURATION ---
 // Set the default URL provided by the user
-const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwiHlxBLPTPsucW_8pQ2hS_8Qe5rjVKD8CBnND2ITmLruBBgTFM2TKGKPmmQ43rM_w6Tw/exec';
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwQnrHQ4FL6bWpABG-416FJeUVvCpEQtYQCB41CF8Avbk5hqxPB255EHBtuNg9W95kH6Q/exec';
 
 export const getApiUrl = () => {
     const stored = localStorage.getItem(KEYS.API_URL);
@@ -145,43 +148,82 @@ export const deleteUser = (id: string) => {
   localStorage.setItem(KEYS.USERS, JSON.stringify(users));
 };
 
-// --- Master Data Services (Async API) ---
-export const fetchMasterData = async (): Promise<ProductMaster[]> => {
+// --- Master Data Services (Async API with Cache) ---
+export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaster[]> => {
   try {
       if (!getApiUrl()) return [];
+
+      // Check Cache first
+      const cached = localStorage.getItem(KEYS.CACHE_MASTER);
+      if (cached && !forceUpdate) {
+          // If we have cache and not forcing update, return cache immediately
+          // But we can trigger a background update if needed, 
+          // for now, we'll let the user manually refresh or component decide logic
+          return JSON.parse(cached);
+      }
+
       const data = await callApi('getProducts', 'GET');
-      return Array.isArray(data) ? data : [];
+      
+      if (Array.isArray(data)) {
+          // Update Cache
+          localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(data));
+          localStorage.setItem(KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+          return data;
+      }
+      return [];
   } catch (e) {
       console.error("Failed to fetch products", e);
+      // Fallback to cache if API fails
+      const cached = localStorage.getItem(KEYS.CACHE_MASTER);
+      if (cached) return JSON.parse(cached);
       return [];
   }
 };
 
 export const saveProduct = async (product: ProductMaster) => {
-  return await callApi('saveProduct', 'POST', product);
+  const result = await callApi('saveProduct', 'POST', product);
+  // Invalidate cache or optimistic update could happen here
+  // For simplicity, we just clear cache to force refetch next time
+  localStorage.removeItem(KEYS.CACHE_MASTER); 
+  return result;
 };
 
 export const deleteProduct = async (barcode: string) => {
   const url = getApiUrl();
   if (!url) return;
-  // Use callApi wrapper for consistency instead of raw fetch
-  await callApi('deleteProduct', 'GET', null); // Currently using GET with params is easier for delete in some GAS setups, but let's stick to standard if possible.
-  // Actually, for delete via POST:
   await fetch(`${url}?action=deleteProduct&barcode=${barcode}`, { 
       method: 'POST',
       mode: 'cors',
       credentials: 'omit',
       redirect: 'follow'
   });
+  localStorage.removeItem(KEYS.CACHE_MASTER);
 };
 
-// --- QC Log Services (Async API) ---
-export const fetchQCLogs = async (): Promise<QCRecord[]> => {
+// --- QC Log Services (Async API with Cache) ---
+export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     try {
         if (!getApiUrl()) return [];
+
+        const cached = localStorage.getItem(KEYS.CACHE_LOGS);
+        if (cached && !forceUpdate) {
+            const parsed = JSON.parse(cached);
+            // Sort by timestamp desc
+            return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        }
+
         const data = await callApi('getQCLogs', 'GET');
-        return Array.isArray(data) ? data.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()) : [];
+        
+        if (Array.isArray(data)) {
+            localStorage.setItem(KEYS.CACHE_LOGS, JSON.stringify(data));
+            const sorted = data.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            return sorted;
+        }
+        return [];
     } catch (e) {
+        console.error("Failed to fetch logs", e);
+        const cached = localStorage.getItem(KEYS.CACHE_LOGS);
+        if (cached) return JSON.parse(cached);
         return [];
     }
 };
@@ -191,11 +233,15 @@ export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) =
     ...record,
     timestamp: new Date().toISOString(),
   };
-  return await callApi('saveQC', 'POST', newRecord);
+  const result = await callApi('saveQC', 'POST', newRecord);
+  // Clear logs cache to ensure fresh data on next view
+  localStorage.removeItem(KEYS.CACHE_LOGS);
+  return result;
 };
 
 export const exportQCLogs = async (): Promise<void> => {
-    const logs = await fetchQCLogs();
+    // For export, we usually want fresh data, so forceUpdate = true
+    const logs = await fetchQCLogs(true);
     const exportData = logs.map(log => ({
         'Lot no.': log.lotNo || '',
         'Type': log.productType || '',
@@ -280,6 +326,8 @@ export const importMasterData = async (file: File): Promise<number> => {
             await saveProduct(p);
             count++;
         }
+        // Invalidate cache after import
+        localStorage.removeItem(KEYS.CACHE_MASTER);
         resolve(count);
       } catch (err) {
         reject(err);
