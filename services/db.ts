@@ -9,7 +9,16 @@ const KEYS = {
 };
 
 // --- CONFIGURATION ---
-export const getApiUrl = () => localStorage.getItem(KEYS.API_URL) || '';
+// Set the default URL provided by the user
+const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwiHlxBLPTPsucW_8pQ2hS_8Qe5rjVKD8CBnND2ITmLruBBgTFM2TKGKPmmQ43rM_w6Tw/exec';
+
+export const getApiUrl = () => {
+    const stored = localStorage.getItem(KEYS.API_URL);
+    // Return stored URL if exists, otherwise return the hardcoded default
+    if (stored) return stored;
+    return DEFAULT_API_URL;
+};
+
 export const setApiUrl = (url: string) => {
     localStorage.setItem(KEYS.API_URL, url.trim());
 };

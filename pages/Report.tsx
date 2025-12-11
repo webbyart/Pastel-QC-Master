@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
@@ -16,9 +16,12 @@ export const Report: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<QCStatus | 'All'>('All');
   const [dateFilter, setDateFilter] = useState('');
   const [inspectorFilter, setInspectorFilter] = useState('All');
+  const [commentFilter, setCommentFilter] = useState('All');
 
   // Derived Data
   const inspectors = Array.from(new Set(logs.map(l => l.inspectorId)));
+  // Extract unique comments (reasons), filter out empty ones
+  const comments = Array.from(new Set(logs.map(l => l.reason).filter(r => r && r.trim() !== ''))).sort();
 
   useEffect(() => {
     const init = async () => {
@@ -50,12 +53,16 @@ export const Report: React.FC = () => {
       result = result.filter(l => l.inspectorId === inspectorFilter);
     }
 
+    if (commentFilter !== 'All') {
+      result = result.filter(l => l.reason === commentFilter);
+    }
+
     if (dateFilter) {
       result = result.filter(l => l.timestamp.startsWith(dateFilter));
     }
 
     setFilteredLogs(result);
-  }, [logs, search, statusFilter, dateFilter, inspectorFilter]);
+  }, [logs, search, statusFilter, dateFilter, inspectorFilter, commentFilter]);
 
   const handleExport = async () => {
     setIsExporting(true);
@@ -116,13 +123,13 @@ export const Report: React.FC = () => {
       </header>
 
       {/* Filter Bar */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-5 gap-4">
         {/* Search */}
-        <div className="relative">
+        <div className="relative md:col-span-1">
            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
            <input 
              type="text" 
-             placeholder="ค้นหา Product, Barcode, RMS..." 
+             placeholder="ค้นหา..." 
              value={search}
              onChange={(e) => setSearch(e.target.value)}
              className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white transition-all placeholder-gray-400"
@@ -135,11 +142,29 @@ export const Report: React.FC = () => {
           <select 
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700"
+            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
           >
             <option value="All">สถานะทั้งหมด</option>
             <option value={QCStatus.PASS}>ผ่าน (Pass)</option>
             <option value={QCStatus.DAMAGE}>ชำรุด (Damage)</option>
+          </select>
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+            <ChevronDown size={14} className="text-gray-500" />
+          </div>
+        </div>
+
+        {/* Comment Filter */}
+        <div className="relative">
+          <MessageSquare className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+          <select 
+            value={commentFilter}
+            onChange={(e) => setCommentFilter(e.target.value)}
+            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
+          >
+            <option value="All">Comment ทั้งหมด</option>
+            {comments.map(c => (
+                <option key={c} value={c}>{c}</option>
+            ))}
           </select>
           <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
             <ChevronDown size={14} className="text-gray-500" />
@@ -152,7 +177,7 @@ export const Report: React.FC = () => {
           <select 
             value={inspectorFilter}
             onChange={(e) => setInspectorFilter(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700"
+            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
           >
             <option value="All">ผู้ตรวจสอบทั้งหมด</option>
             {inspectors.map(name => (
