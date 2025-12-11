@@ -3,8 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterData, saveQCRecord, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye, ChevronDown, QrCode, Link, Loader2, RefreshCw } from 'lucide-react';
+import { Scan, Camera, X, Check, AlertCircle, Package, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, ZoomIn, Eye, ChevronDown, QrCode, Link, Loader2, RefreshCw, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { Html5QrcodeScanner } from "html5-qrcode";
 
 const REASON_OPTIONS = [
   "Unsaleable : ขายไม่ได้",
@@ -31,6 +32,10 @@ export const QCScreen: React.FC = () => {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [hasApiUrl, setHasApiUrl] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
+  
+  // Scanner State
+  const [showScanner, setShowScanner] = useState(false);
   
   // Form State
   const [sellingPrice, setSellingPrice] = useState<string>('');
@@ -62,20 +67,31 @@ export const QCScreen: React.FC = () => {
             return;
         }
         
+        setFetchError(null);
+
         // 1. Instant Cache Load
-        const data = await fetchMasterData(false);
-        setCachedProducts(data);
-        setIsLoading(false);
+        try {
+            const data = await fetchMasterData(false);
+            setCachedProducts(data);
+            if(data.length > 0) setIsLoading(false);
+        } catch (e) {
+            console.warn(e);
+        }
 
         // 2. Background Refresh
         setIsRefreshing(true);
         try {
             const freshData = await fetchMasterData(true);
             setCachedProducts(freshData);
-        } catch(e) {
+            setIsLoading(false);
+        } catch(e: any) {
             console.error(e);
+            if (cachedProducts.length === 0) {
+                 setFetchError(e.message || "Failed to load master data");
+            }
         } finally {
             setIsRefreshing(false);
+            setIsLoading(false);
         }
     };
     init();
@@ -93,9 +109,53 @@ export const QCScreen: React.FC = () => {
     }
   }, [status, sellingPrice, step]);
 
-  const handleScan = (e: React.FormEvent) => {
-    e.preventDefault();
-    const found = cachedProducts.find(p => p.barcode === barcode);
+  // Scanner Effect
+  useEffect(() => {
+    if (showScanner) {
+        // Short delay to ensure DOM is ready
+        const timer = setTimeout(() => {
+            const scanner = new Html5QrcodeScanner(
+                "reader",
+                { 
+                    fps: 10, 
+                    qrbox: { width: 250, height: 250 },
+                    aspectRatio: 1.0,
+                    showTorchButtonIfSupported: true
+                },
+                false
+            );
+            
+            scanner.render(
+                (decodedText) => {
+                    scanner.clear().catch(e => console.error("Failed to clear", e));
+                    setShowScanner(false);
+                    setBarcode(decodedText);
+                    processBarcode(decodedText);
+                },
+                (error) => {
+                    // console.warn(error);
+                }
+            );
+            
+            // Cleanup when component unmounts or scanner closes
+            return () => {
+                 try {
+                     scanner.clear().catch(e => console.error("Failed to clear", e));
+                 } catch (e) {
+                     // ignore
+                 }
+            };
+        }, 100);
+
+        return () => clearTimeout(timer);
+    }
+  }, [showScanner, cachedProducts]); // Added cachedProducts to ensure processing has latest data
+
+  const processBarcode = (code: string) => {
+    // Normalization: Remove whitespace
+    const cleanCode = code.trim();
+    const found = cachedProducts.find(p => p.barcode === cleanCode);
+    
     if (found) {
       setProduct(found);
       setSellingPrice(''); 
@@ -114,8 +174,13 @@ export const QCScreen: React.FC = () => {
       setErrors({});
       setStep('form');
     } else {
-      setErrors({ scan: 'ไม่พบสินค้าในระบบ' });
+      setErrors({ scan: `ไม่พบสินค้า: ${cleanCode}` });
     }
+  };
+
+  const handleScan = (e: React.FormEvent) => {
+    e.preventDefault();
+    processBarcode(barcode);
   };
 
   const handleStatusChange = (newStatus: QCStatus) => {
@@ -203,13 +268,20 @@ export const QCScreen: React.FC = () => {
     }
   };
 
-  const triggerScan = () => {
-      inputRef.current?.focus();
-      setErrors({ scan: 'พร้อมสแกน (Ready)' });
-      setTimeout(() => setErrors({}), 2000);
-  };
-
   const isCriticalCondition = status === QCStatus.DAMAGE || (parseFloat(sellingPrice) === 0 && sellingPrice !== '');
+
+  if (fetchError && cachedProducts.length === 0) {
+      return (
+          <div className="flex flex-col items-center justify-center h-[60vh] text-center p-6">
+              <AlertCircle size={48} className="text-red-400 mb-4" />
+              <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาดในการโหลดข้อมูล</h3>
+              <p className="text-gray-500 mb-4">{fetchError}</p>
+              <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
+                  <Settings size={16} /> ตรวจสอบการตั้งค่า
+              </button>
+          </div>
+      );
+  }
 
   if (isLoading && cachedProducts.length === 0) {
       return <div className="flex justify-center items-center h-[60vh]"><Loader2 className="animate-spin text-pastel-blueDark" size={40} /></div>;
@@ -259,13 +331,13 @@ export const QCScreen: React.FC = () => {
                 className="w-full pl-6 pr-14 py-4 text-lg rounded-2xl bg-white dark:bg-gray-800 shadow-xl border-2 border-transparent focus:border-pastel-blueDark focus:ring-0 transition-all dark:text-white"
                 />
                 
-                {/* Scan Button Icon inside input area */}
+                {/* Camera Scan Trigger */}
                 <button 
                     type="button" 
-                    onClick={triggerScan}
+                    onClick={() => setShowScanner(true)}
                     className="absolute right-3 p-2 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 rounded-xl hover:bg-pastel-blue hover:text-pastel-blueDark transition-colors"
                 >
-                    <QrCode size={24} />
+                    <Camera size={24} />
                 </button>
             </div>
 
@@ -534,6 +606,23 @@ export const QCScreen: React.FC = () => {
                  </button>
               </div>
            </div>
+        </div>
+      )}
+
+      {/* Camera Scanner Modal */}
+      {showScanner && (
+        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
+             <div className="relative w-full max-w-sm bg-black rounded-3xl overflow-hidden shadow-2xl border border-gray-800">
+                 <div className="absolute top-4 right-4 z-10">
+                     <button onClick={() => setShowScanner(false)} className="p-2 bg-white/10 text-white rounded-full hover:bg-white/20">
+                         <X size={24} />
+                     </button>
+                 </div>
+                 <div id="reader" className="w-full h-full bg-black min-h-[350px]"></div>
+                 <div className="p-4 bg-gray-900 text-center text-gray-400 text-sm">
+                     <p>วางตำแหน่งบาร์โค้ด หรือ QR Code ให้อยู่ในกรอบ</p>
+                 </div>
+             </div>
         </div>
       )}
 

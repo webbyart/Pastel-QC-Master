@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
-import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { CheckCircle2, AlertTriangle, Package, DollarSign, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw, AlertCircle, Settings as SettingsIcon } from 'lucide-react';
 import { QCStatus, QCRecord } from '../types';
 import { useNavigate } from 'react-router-dom';
 
@@ -11,26 +11,35 @@ export const Dashboard: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // Optimized Loading Strategy:
-  // 1. Load from cache immediately (isLoading becomes false fast)
-  // 2. Fetch fresh data in background (isRefreshing true)
   useEffect(() => {
     const init = async () => {
-        // Step 1: Get cached data first for instant UI
-        const cachedData = await fetchQCLogs(false);
-        setLogs(cachedData);
-        setIsLoading(false);
+        setError(null);
+        // Step 1: Get cached data first
+        try {
+            const cachedData = await fetchQCLogs(false);
+            setLogs(cachedData);
+            if (cachedData.length > 0) setIsLoading(false);
+        } catch (e) {
+            console.warn("Cache load error", e);
+        }
 
         // Step 2: Fetch fresh data in background
         setIsRefreshing(true);
         try {
             const freshData = await fetchQCLogs(true);
             setLogs(freshData);
-        } catch (e) {
+            setIsLoading(false);
+        } catch (e: any) {
             console.error("Background refresh failed", e);
+            if (logs.length === 0) {
+                 setError(e.message || "Failed to connect");
+            }
         } finally {
             setIsRefreshing(false);
+            setIsLoading(false);
         }
     };
     init();
@@ -38,9 +47,15 @@ export const Dashboard: React.FC = () => {
 
   const handleManualRefresh = async () => {
       setIsRefreshing(true);
-      const data = await fetchQCLogs(true);
-      setLogs(data);
-      setIsRefreshing(false);
+      setError(null);
+      try {
+          const data = await fetchQCLogs(true);
+          setLogs(data);
+      } catch (e: any) {
+          setError(e.message);
+      } finally {
+          setIsRefreshing(false);
+      }
   };
 
   const stats = useMemo(() => {
@@ -103,6 +118,21 @@ export const Dashboard: React.FC = () => {
             </div>
         </button>
       </div>
+
+      {/* Error State */}
+      {error && logs.length === 0 && (
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded-2xl p-6 text-center animate-slide-up">
+              <AlertCircle size={48} className="text-red-500 mx-auto mb-3" />
+              <h3 className="text-lg font-bold text-red-700 dark:text-red-400 mb-1">การเชื่อมต่อล้มเหลว</h3>
+              <p className="text-sm text-red-600 dark:text-red-300 mb-4">{error}</p>
+              <button 
+                onClick={() => navigate('/settings')}
+                className="bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold shadow-md flex items-center gap-2 mx-auto hover:bg-red-700"
+              >
+                  <SettingsIcon size={16} /> ไปที่การตั้งค่า
+              </button>
+          </div>
+      )}
 
       {isLoading && logs.length === 0 ? (
           <div className="flex flex-col justify-center items-center h-[40vh] space-y-4">

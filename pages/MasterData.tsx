@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw } from 'lucide-react';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const MasterData: React.FC = () => {
@@ -14,6 +14,7 @@ export const MasterData: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [hasApiUrl, setHasApiUrl] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   
   // Modal State
   const [showModal, setShowModal] = useState(false);
@@ -34,11 +35,17 @@ export const MasterData: React.FC = () => {
         return;
     }
     
+    setError(null);
+
     // 1. Instant Cache
     if (!forceUpdate) {
-        const cached = await fetchMasterData(false);
-        setProducts(cached);
-        setIsLoading(false);
+        try {
+            const cached = await fetchMasterData(false);
+            setProducts(cached);
+            if (cached.length > 0) setIsLoading(false);
+        } catch (e) {
+            console.warn("Cache load failed", e);
+        }
     } else {
         setIsRefreshing(true);
     }
@@ -48,10 +55,14 @@ export const MasterData: React.FC = () => {
         const fresh = await fetchMasterData(true);
         setProducts(fresh);
         setIsLoading(false);
-    } catch(e) {
+    } catch(e: any) {
         console.error(e);
+        if (products.length === 0) {
+            setError(e.message || "Failed to load products");
+        }
     } finally {
         setIsRefreshing(false);
+        setIsLoading(false);
     }
   };
 
@@ -221,7 +232,16 @@ export const MasterData: React.FC = () => {
       </div>
 
       {/* Content Area */}
-      {isLoading && products.length === 0 ? (
+      {error && products.length === 0 ? (
+           <div className="flex flex-col items-center justify-center h-64 text-center p-6">
+              <AlertCircle size={48} className="text-red-400 mb-4" />
+              <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
+              <p className="text-gray-500 mb-4">{error}</p>
+              <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
+                  <Settings size={16} /> ตรวจสอบการตั้งค่า
+              </button>
+          </div>
+      ) : isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark mb-4" />
               <p>กำลังโหลดข้อมูล...</p>

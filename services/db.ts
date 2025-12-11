@@ -31,11 +31,14 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
-    const fullUrl = method === 'GET' ? `${url}?action=${action}` : url;
+    // Add timestamp to prevent caching on GET requests
+    const timestamp = `_t=${Date.now()}`;
+    const queryParams = `action=${action}&${timestamp}`;
     
-    // For POST requests to Google Apps Script, we append the action to the URL parameters
-    // and send the body as stringified JSON in text/plain mode to avoid CORS preflight issues.
-    const fetchUrl = method === 'POST' ? `${url}${url.includes('?') ? '&' : '?'}action=${action}` : fullUrl;
+    // Construct URLs
+    // For GET: Append params to URL
+    // For POST: Append params to URL (GAS requires action in query string for doPost)
+    const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
 
     const options: RequestInit = {
         method,
@@ -43,7 +46,7 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         credentials: 'omit', // CRITICAL: Prevents auth headers that confuse GAS
         redirect: 'follow', // Follow GAS redirects
         headers: {
-             "Content-Type": "text/plain;charset=utf-8", 
+             "Content-Type": "text/plain", // Keep simple to avoid preflight options
         },
     };
 
@@ -70,8 +73,8 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         }
     } catch (e: any) {
         console.error("API Error:", e);
-        if (e.message === 'Failed to fetch') {
-            throw new Error("Connection Failed: Check your internet or Google Script URL permissions.");
+        if (e.message === 'Failed to fetch' || e.message.includes('NetworkError')) {
+            throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
         }
         throw e;
     }
@@ -83,11 +86,12 @@ export const testApiConnection = async () => {
       if (!url) return { success: false, error: "URL is empty" };
 
       // Use a simple GET request
-      const res = await fetch(`${url}?action=getProducts`, { 
+      const res = await fetch(`${url}?action=getProducts&_t=${Date.now()}`, { 
           method: 'GET',
           mode: 'cors',
           credentials: 'omit',
-          redirect: 'follow'
+          redirect: 'follow',
+          headers: { "Content-Type": "text/plain" }
       });
       
       const text = await res.text();
@@ -156,9 +160,6 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
       // Check Cache first
       const cached = localStorage.getItem(KEYS.CACHE_MASTER);
       if (cached && !forceUpdate) {
-          // If we have cache and not forcing update, return cache immediately
-          // But we can trigger a background update if needed, 
-          // for now, we'll let the user manually refresh or component decide logic
           return JSON.parse(cached);
       }
 
@@ -173,17 +174,15 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
       return [];
   } catch (e) {
       console.error("Failed to fetch products", e);
-      // Fallback to cache if API fails
+      // Fallback to cache if API fails, but re-throw if no cache so UI knows
       const cached = localStorage.getItem(KEYS.CACHE_MASTER);
       if (cached) return JSON.parse(cached);
-      return [];
+      throw e;
   }
 };
 
 export const saveProduct = async (product: ProductMaster) => {
   const result = await callApi('saveProduct', 'POST', product);
-  // Invalidate cache or optimistic update could happen here
-  // For simplicity, we just clear cache to force refetch next time
   localStorage.removeItem(KEYS.CACHE_MASTER); 
   return result;
 };
@@ -191,11 +190,14 @@ export const saveProduct = async (product: ProductMaster) => {
 export const deleteProduct = async (barcode: string) => {
   const url = getApiUrl();
   if (!url) return;
+  // Use callApi structure or manual fetch, callApi is better but delete uses query param
+  // Let's implement manually to match exact param requirement
   await fetch(`${url}?action=deleteProduct&barcode=${barcode}`, { 
       method: 'POST',
       mode: 'cors',
       credentials: 'omit',
-      redirect: 'follow'
+      redirect: 'follow',
+      headers: { "Content-Type": "text/plain" }
   });
   localStorage.removeItem(KEYS.CACHE_MASTER);
 };
@@ -208,7 +210,6 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
         const cached = localStorage.getItem(KEYS.CACHE_LOGS);
         if (cached && !forceUpdate) {
             const parsed = JSON.parse(cached);
-            // Sort by timestamp desc
             return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         }
 
@@ -224,7 +225,7 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
         console.error("Failed to fetch logs", e);
         const cached = localStorage.getItem(KEYS.CACHE_LOGS);
         if (cached) return JSON.parse(cached);
-        return [];
+        throw e;
     }
 };
 
@@ -240,7 +241,6 @@ export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) =
 };
 
 export const exportQCLogs = async (): Promise<void> => {
-    // For export, we usually want fresh data, so forceUpdate = true
     const logs = await fetchQCLogs(true);
     const exportData = logs.map(log => ({
         'Lot no.': log.lotNo || '',
@@ -300,22 +300,16 @@ export const importMasterData = async (file: File): Promise<number> => {
         const products: ProductMaster[] = json.map((row: any) => ({
           // Map 'RMS Return Item ID' OR 'Barcode'
           barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || ''),
-          
           // Map 'Product Name'
           productName: String(row['Product Name'] || row['ProductName'] || row['Name'] || ''),
-          
           // Map 'ต้นทุน' OR 'CostPrice'
           costPrice: Number(row['ต้นทุน'] || row['CostPrice'] || row['Cost'] || 0),
-          
           // Map 'Product unit price' OR 'UnitPrice'
           unitPrice: Number(row['Product unit price'] || row['UnitPrice'] || row['Price'] || 0),
-          
           // New: Map 'Lot no.'
           lotNo: String(row['Lot no.'] || row['Lot'] || row['LotNo'] || ''),
-          
           // New: Map 'Type'
           productType: String(row['Type'] || row['ProductType'] || ''),
-
           stock: Number(row['Stock'] || row['stock'] || row['Qty'] || 0),
           image: String(row['Image'] || row['image'] || row['ImageUrl'] || ''),
         })).filter(p => p.barcode && p.productName);
@@ -326,7 +320,6 @@ export const importMasterData = async (file: File): Promise<number> => {
             await saveProduct(p);
             count++;
         }
-        // Invalidate cache after import
         localStorage.removeItem(KEYS.CACHE_MASTER);
         resolve(count);
       } catch (err) {
