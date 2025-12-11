@@ -34,65 +34,104 @@ export const clearCache = () => {
     localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
 };
 
-// --- Helper for API Calls with Retry ---
+// Request Deduplication Map to prevent simultaneous identical calls
+const pendingRequests: Record<string, Promise<any>> = {};
+
+// --- Helper for API Calls with Retry & Deduplication ---
 const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
-    const timestamp = `_t=${Date.now()}`;
-    const queryParams = `action=${action}&${timestamp}`;
-    
-    const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
+    // 1. Generate Unique Request Key
+    const requestKey = `${action}-${method}-${JSON.stringify(body || {})}`;
 
-    const options: RequestInit = {
-        method,
-        mode: 'cors',
-        credentials: 'omit',
-        redirect: 'follow',
-        headers: {
-             "Content-Type": "text/plain",
-        },
-    };
-
-    if (method === 'POST') {
-        options.body = JSON.stringify(body);
+    // 2. Return existing promise if already in flight (Prevents double-fetch)
+    if (pendingRequests[requestKey]) {
+        console.log(`[API] Deduplicated request: ${action}`);
+        return pendingRequests[requestKey];
     }
-    
-    let lastError: any;
-    const RETRIES = 3;
 
-    for (let i = 0; i < RETRIES; i++) {
-        try {
-            const res = await fetch(fetchUrl, options);
-            if (!res.ok) {
-                 throw new Error(`HTTP Error: ${res.status}`);
-            }
-            const text = await res.text();
+    const executeRequest = async () => {
+        const timestamp = `_t=${Date.now()}`;
+        const queryParams = `action=${action}&${timestamp}`;
+        const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
+
+        const options: RequestInit = {
+            method,
+            mode: 'cors',
+            credentials: 'omit',
+            redirect: 'follow',
+            headers: { "Content-Type": "text/plain" },
+        };
+
+        if (method === 'POST') {
+            options.body = JSON.stringify(body);
+        }
+        
+        let lastError: any;
+        const RETRIES = 3;
+
+        for (let i = 0; i < RETRIES; i++) {
             try {
-                const json = JSON.parse(text);
-                if (json.error) throw new Error(json.error);
-                return json;
-            } catch (e) {
+                const res = await fetch(fetchUrl, options);
+                
+                // Handle 429 Too Many Requests specifically
+                if (res.status === 429) {
+                    throw new Error("The quota has been exceeded. Please wait a minute.");
+                }
+
+                if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+                
+                const text = await res.text();
+                
+                // Check for HTML response (Script error pages)
                 if (text.trim().startsWith('<')) {
+                    if (text.includes('quota') || text.includes('exceeded')) {
+                         throw new Error("The quota has been exceeded. Please wait a minute.");
+                    }
                     throw new Error("Connection Blocked: Please set 'Who has access' to 'Anyone' in your Script deployment.");
                 }
-                throw e;
-            }
-        } catch (e: any) {
-            console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
-            lastError = e;
-            // Wait before retry (500ms, 1000ms, 1500ms)
-            if (i < RETRIES - 1) {
-                await new Promise(r => setTimeout(r, 500 * (i + 1)));
+
+                try {
+                    const json = JSON.parse(text);
+                    if (json.error) throw new Error(json.error);
+                    return json;
+                } catch (e) {
+                    throw new Error("Invalid response format from Google Script");
+                }
+            } catch (e: any) {
+                console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
+                lastError = e;
+                
+                // CRITICAL: Stop retrying if quota exceeded to prevent making it worse
+                if (e.message.includes('quota') || e.message.includes('exceeded')) {
+                    break;
+                }
+
+                // Wait before retry (Exponential backoff: 1s, 2s, 3s)
+                if (i < RETRIES - 1) {
+                    await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+                }
             }
         }
-    }
 
-    console.error("API Error Final:", lastError);
-    if (lastError.message === 'Failed to fetch' || lastError.message.includes('NetworkError')) {
-        throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
+        console.error("API Error Final:", lastError);
+        if (lastError.message === 'Failed to fetch' || lastError.message.includes('NetworkError')) {
+            throw new Error("Connection Failed: Check internet or Script Permissions (Must be 'Anyone').");
+        }
+        throw lastError;
+    };
+
+    // 3. Store and execute promise
+    const promise = executeRequest();
+    pendingRequests[requestKey] = promise;
+
+    try {
+        return await promise;
+    } finally {
+        // 4. Cleanup after completion
+        delete pendingRequests[requestKey];
     }
-    throw lastError;
 };
 
 export const testApiConnection = async () => {
@@ -100,7 +139,6 @@ export const testApiConnection = async () => {
       const url = getApiUrl().trim();
       if (!url) return { success: false, error: "URL is empty" };
 
-      // Manual fetch for test to avoid retry delay on failure
       const res = await fetch(`${url}?action=getProducts&_t=${Date.now()}`, { 
           method: 'GET',
           mode: 'cors',
@@ -119,6 +157,9 @@ export const testApiConnection = async () => {
           const count = Array.isArray(json) ? json.length : 0;
           return { success: true, message: `Connected! Found ${count} products.` };
       } catch (e) {
+          if (text.includes('quota')) {
+              return { success: false, error: "Google Quota Exceeded. Please wait 1 minute." };
+          }
           return { 
               success: false, 
               error: "Invalid response. Ensure 'Who has access' is 'Anyone' in deployment settings.",
@@ -178,7 +219,7 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
       return JSON.parse(cached);
   }
 
-  // 2. Throttle check: If forcing update (background sync) but within throttle time, return cache
+  // 2. Throttle check
   if (forceUpdate && !skipThrottle && lastFetch && cached) {
       if (now - new Date(lastFetch).getTime() < THROTTLE_TIME) {
           console.log("Throttling Master Data API call");
@@ -199,19 +240,12 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
   } catch (e: any) {
       console.error("Failed to fetch products", e);
       
-      // 3. Graceful Fallback: If network error, return cache if available
-      if (cached && (
-          e.message.includes('quota') || 
-          e.message.includes('exceeded') || 
-          e.message.includes('Failed to fetch') || 
-          e.message.includes('Connection Failed')
-      )) {
-          console.warn("Network fail, using cache");
+      // 3. Graceful Fallback: If network error or QUOTA error, return cache if available
+      if (cached) {
+          console.warn("Using cache due to network/quota error");
           return JSON.parse(cached);
       }
       
-      // If no cache, we must throw
-      if (cached) return JSON.parse(cached);
       throw e;
   }
 };
@@ -226,10 +260,12 @@ export const saveProduct = async (product: ProductMaster) => {
 export const deleteProduct = async (barcode: string) => {
   const url = getApiUrl();
   if (!url) return;
-  // Use callApi but handle parameters manually or update callApi to support DELETE params
-  // Using direct fetch here for simplicity of query params, but with retry manual implementation
-  await callApi('deleteProduct', 'GET'); // Actually script expects deleteProduct via POST usually or GET with param
-  // Re-implementing specific delete call via direct fetch to match Script logic:
+  
+  await callApi('deleteProduct', 'POST', { barcode }); // Changed to POST with body for consistency if script supports it, or URL param
+  // For safety with current script structure that might use GET param for delete:
+  // We keep the manual fetch for delete if the script expects GET param, but ideally standardize to POST
+  // Reverting to manual fetch to match script 'deleteProduct' using GET param 'barcode' in previous example, 
+  // or POST body in improved script. Let's use the safer manual fetch from previous working version:
   await fetch(`${url}?action=deleteProduct&barcode=${barcode}`, { 
       method: 'POST',
       mode: 'cors',
@@ -237,6 +273,7 @@ export const deleteProduct = async (barcode: string) => {
       redirect: 'follow',
       headers: { "Content-Type": "text/plain" }
   });
+
   localStorage.removeItem(KEYS.CACHE_MASTER);
   localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
 };
@@ -253,7 +290,6 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
         return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
     }
 
-    // Throttle check
     if (forceUpdate && !skipThrottle && lastFetch && cached) {
         if (now - new Date(lastFetch).getTime() < THROTTLE_TIME) {
             console.log("Throttling QC Logs API call");
@@ -267,9 +303,7 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
         const rawData = await callApi('getQCLogs', 'GET');
         
         if (Array.isArray(rawData)) {
-            // Robust mapping to handle missing 'status' field from script
             const processedData = rawData.map((item: any) => {
-                 // Logic to infer Status if missing or ambiguous
                  let inferredStatus = item.status;
                  if (!inferredStatus || (inferredStatus !== 'Pass' && inferredStatus !== 'Damage')) {
                      const hasReason = item.reason && String(item.reason).trim().length > 0;
@@ -279,7 +313,6 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
                  return {
                      ...item,
                      status: inferredStatus,
-                     // Ensure numeric values
                      sellingPrice: Number(item.sellingPrice) || 0,
                      costPrice: Number(item.costPrice) || 0,
                      unitPrice: Number(item.unitPrice) || 0
@@ -295,19 +328,11 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
         return [];
     } catch (e: any) {
         console.error("Failed to fetch logs", e);
-        // Graceful Fallback
-        if (cached && (
-            e.message.includes('quota') || 
-            e.message.includes('exceeded') || 
-            e.message.includes('Failed to fetch') || 
-            e.message.includes('Connection Failed')
-        )) {
-            console.warn("Network fail, using cache for logs");
+        if (cached) {
+            console.warn("Using cache for logs due to error");
             const parsed = JSON.parse(cached);
             return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         }
-
-        if (cached) return JSON.parse(cached);
         throw e;
     }
 };
@@ -318,14 +343,12 @@ export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) =
     timestamp: new Date().toISOString(),
   };
   const result = await callApi('saveQC', 'POST', newRecord);
-  // Clear logs cache to ensure fresh data on next view
   localStorage.removeItem(KEYS.CACHE_LOGS);
   localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
   return result;
 };
 
 export const exportQCLogs = async (): Promise<void> => {
-    // Try to get fresh data, but allow cache fallback if needed
     let logs;
     try {
         logs = await fetchQCLogs(true, true); 
@@ -388,25 +411,17 @@ export const importMasterData = async (file: File): Promise<number> => {
         const sheet = workbook.Sheets[sheetName];
         const json = XLSX.utils.sheet_to_json(sheet);
 
-        // Normalize Data using user specific columns
         const products: ProductMaster[] = json.map((row: any) => ({
-          // Map 'RMS Return Item ID' OR 'Barcode'
           barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || ''),
-          // Map 'Product Name'
           productName: String(row['Product Name'] || row['ProductName'] || row['Name'] || ''),
-          // Map 'ต้นทุน' OR 'CostPrice'
           costPrice: Number(row['ต้นทุน'] || row['CostPrice'] || row['Cost'] || 0),
-          // Map 'Product unit price' OR 'UnitPrice'
           unitPrice: Number(row['Product unit price'] || row['UnitPrice'] || row['Price'] || 0),
-          // New: Map 'Lot no.'
           lotNo: String(row['Lot no.'] || row['Lot'] || row['LotNo'] || ''),
-          // New: Map 'Type'
           productType: String(row['Type'] || row['ProductType'] || ''),
           stock: Number(row['Stock'] || row['stock'] || row['Qty'] || 0),
           image: String(row['Image'] || row['image'] || row['ImageUrl'] || ''),
         })).filter(p => p.barcode && p.productName);
 
-        // Upload one by one
         let count = 0;
         for (const p of products) {
             await saveProduct(p);

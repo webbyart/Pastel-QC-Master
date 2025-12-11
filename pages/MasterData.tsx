@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings } from 'lucide-react';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings, Clock } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
 export const MasterData: React.FC = () => {
@@ -25,7 +25,6 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Initial load: prefer cache, then background sync (throttled)
     loadData(false);
   }, []);
 
@@ -39,7 +38,7 @@ export const MasterData: React.FC = () => {
     setError(null);
     let hasCachedData = false;
 
-    // 1. Instant Cache Display (only if not manual refresh)
+    // 1. Instant Cache Display
     if (!isManualRefresh) {
         try {
             const cached = await fetchMasterData(false);
@@ -55,20 +54,21 @@ export const MasterData: React.FC = () => {
         setIsRefreshing(true);
     }
     
-    // 2. Network Sync (Throttled unless manual)
+    // 2. Network Sync
     try {
-        // fetchMasterData(forceUpdate, skipThrottle)
         const fresh = await fetchMasterData(true, isManualRefresh);
         setProducts(fresh);
         setIsLoading(false);
     } catch(e: any) {
         console.error(e);
-        // Only show error screen if we have absolutely no data
         if (!hasCachedData) {
             setError(e.message || "Failed to load products");
         } else if (isManualRefresh) {
-            // If manual refresh failed but we have data, show alert
-            alert(`Update failed: ${e.message}`);
+            if (e.message.includes('quota') || e.message.includes('exceeded')) {
+                 alert('⚠️ ระบบ Google ยุ่งอยู่ (Quota Exceeded) กรุณารอสักครู่แล้วลองใหม่');
+            } else {
+                 alert(`Update failed: ${e.message}`);
+            }
         }
     } finally {
         setIsRefreshing(false);
@@ -86,7 +86,7 @@ export const MasterData: React.FC = () => {
         setImportProgress(100);
         
         setTimeout(() => {
-            loadData(true); // Force refresh after import
+            loadData(true); 
             setIsImporting(false);
             setImportProgress(0);
             alert(`✨ นำเข้าข้อมูลสำเร็จ ${count} รายการ!`);
@@ -107,7 +107,7 @@ export const MasterData: React.FC = () => {
   const confirmDelete = async () => {
     if (deleteId) {
         await deleteProduct(deleteId);
-        setProducts(products.filter(p => p.barcode !== deleteId)); // Optimistic UI
+        setProducts(products.filter(p => p.barcode !== deleteId));
         setDeleteId(null);
     }
   };
@@ -122,13 +122,6 @@ export const MasterData: React.FC = () => {
     setIsEditMode(false);
     setEditingProduct({});
     setShowModal(true);
-  };
-
-  const handleProductImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-        const base64 = await compressImage(e.target.files[0]);
-        setEditingProduct({ ...editingProduct, image: base64 });
-    }
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -149,7 +142,7 @@ export const MasterData: React.FC = () => {
         productType: editingProduct.productType
     });
     setShowModal(false);
-    loadData(true); // Force refresh
+    loadData(true);
   };
 
   const filtered = products.filter(p => 
@@ -243,13 +236,23 @@ export const MasterData: React.FC = () => {
 
       {/* Content Area */}
       {error && products.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-64 text-center p-6">
-              <AlertCircle size={48} className="text-red-400 mb-4" />
-              <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
-              <p className="text-gray-500 mb-4">{error}</p>
-              <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
-                  <Settings size={16} /> ตรวจสอบการตั้งค่า
-              </button>
+           <div className="flex flex-col items-center justify-center h-64 text-center p-6 bg-red-50 dark:bg-red-900/10 rounded-3xl border border-red-100 dark:border-red-900/30">
+              {error.includes('quota') || error.includes('exceeded') ? (
+                  <>
+                    <Clock size={48} className="text-orange-500 mb-4 animate-pulse" />
+                    <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ระบบกำลังทำงานหนัก (Quota Exceeded)</h3>
+                    <p className="text-gray-600 dark:text-gray-300 mb-4 max-w-xs">กรุณารอสักครู่ (ประมาณ 1 นาที) แล้วกดปุ่ม "อัปเดต" ใหม่อีกครั้ง</p>
+                  </>
+              ) : (
+                  <>
+                    <AlertCircle size={48} className="text-red-400 mb-4" />
+                    <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
+                    <p className="text-gray-500 mb-4">{error}</p>
+                    <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
+                        <Settings size={16} /> ตรวจสอบการตั้งค่า
+                    </button>
+                  </>
+              )}
           </div>
       ) : isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
