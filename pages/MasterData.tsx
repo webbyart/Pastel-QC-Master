@@ -209,7 +209,7 @@ export const MasterData: React.FC = () => {
         <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
             <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
                 <Upload size={16} />
-                <span>นำเข้า Excel</span>
+                <span>นำเข้า Excel (A:D)</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
             </label>
             <button 
@@ -302,8 +302,7 @@ export const MasterData: React.FC = () => {
                         <th className="p-4 font-medium">Lot No.</th>
                         <th className="p-4 font-medium">Type</th>
                         <th className="p-4 font-medium">ชื่อสินค้า</th>
-                        <th className="p-4 font-medium">ต้นทุน</th>
-                        <th className="p-4 font-medium">Unit Price</th>
+                        {/* Hidden Cost/Price Columns (A:D Only) */}
                         <th className="p-4 font-medium text-right pr-6">จัดการ</th>
                     </tr>
                 </thead>
@@ -318,8 +317,6 @@ export const MasterData: React.FC = () => {
                                  ) : '-'}
                              </td>
                             <td className="p-4 font-bold text-gray-800 dark:text-white">{product.productName}</td>
-                            <td className="p-4 font-medium text-gray-600 dark:text-gray-300">฿{product.costPrice.toFixed(2)}</td>
-                            <td className="p-4 font-medium text-gray-600 dark:text-gray-300">฿{(product.unitPrice || 0).toLocaleString()}</td>
                             <td className="p-4 text-right pr-6">
                                 <div className="flex justify-end gap-2">
                                     <button onClick={() => handleEdit(product)} className="p-2 text-blue-500 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
@@ -347,7 +344,6 @@ export const MasterData: React.FC = () => {
                 <div className="flex justify-between items-start mb-2">
                     <div>
                         <span className="text-xs font-bold text-pastel-blueDark bg-blue-50 dark:bg-blue-900/30 px-2 py-1 rounded">RMS: {product.barcode}</span>
-                        {product.lotNo && <span className="ml-2 text-xs text-gray-500">Lot: {product.lotNo}</span>}
                     </div>
                     <div className="flex gap-2">
                             <button onClick={() => handleEdit(product)} className="text-blue-500"><Edit2 size={16} /></button>
@@ -357,15 +353,17 @@ export const MasterData: React.FC = () => {
                 
                 <h3 className="font-bold text-gray-800 dark:text-white mb-2">{product.productName}</h3>
                 
-                <div className="flex justify-between items-center text-sm bg-gray-50 dark:bg-gray-700/50 p-3 rounded-xl">
-                    <div>
-                        <p className="text-xs text-gray-400">ต้นทุน</p>
-                        <span className="font-bold text-gray-700 dark:text-gray-300">฿{product.costPrice.toFixed(2)}</span>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-xs text-gray-400">Unit Price</p>
-                        <span className="font-bold text-gray-700 dark:text-gray-300">฿{(product.unitPrice || 0).toLocaleString()}</span>
-                    </div>
+                <div className="flex items-center gap-2 mt-2">
+                    {product.lotNo && (
+                        <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-600 dark:text-gray-300">
+                            Lot: {product.lotNo}
+                        </span>
+                    )}
+                    {product.productType && (
+                        <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-600 dark:text-gray-300">
+                            Type: {product.productType}
+                        </span>
+                    )}
                 </div>
              </div>
         ))}
