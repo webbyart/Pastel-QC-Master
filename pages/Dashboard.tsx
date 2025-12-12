@@ -1,4 +1,3 @@
-
 import React, { useMemo, useState, useEffect } from 'react';
 import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis } from 'recharts';
@@ -63,9 +62,11 @@ export const Dashboard: React.FC = () => {
              // alert('เชื่อมต่อสำเร็จ แต่ไม่พบข้อมูลใน Sheet "QC_Logs"');
           }
       } catch (e: any) {
-          setError(e.message);
-          // If we have data, just warn instead of breaking UI
-          if(logs.length > 0) alert(`Update failed: ${e.message}`);
+          if (logs.length > 0) {
+               alert(`Update failed: ${e.message}`);
+          } else {
+               setError(e.message);
+          }
       } finally {
           setIsRefreshing(false);
       }

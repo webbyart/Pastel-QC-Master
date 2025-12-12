@@ -1,5 +1,3 @@
-
-
 import { ProductMaster, QCRecord, QCStatus, User } from '../types';
 import * as XLSX from 'xlsx';
 
@@ -10,11 +8,15 @@ const KEYS = {
   CACHE_MASTER: 'qc_cache_master',
   CACHE_LOGS: 'qc_cache_logs',
   CACHE_TIMESTAMP: 'qc_cache_time',
-  CACHE_LOGS_TIMESTAMP: 'qc_cache_logs_time'
+  CACHE_LOGS_TIMESTAMP: 'qc_cache_logs_time',
+  API_COOLDOWN: 'qc_api_cooldown'
 };
 
 // --- CONFIGURATION ---
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwQnrHQ4FL6bWpABG-416FJeUVvCpEQtYQCB41CF8Avbk5hqxPB255EHBtuNg9W95kH6Q/exec';
+const CACHE_DURATION_MASTER = 5 * 60 * 1000; // 5 Minutes
+const CACHE_DURATION_LOGS = 2 * 60 * 1000;   // 2 Minutes
+const REQUEST_TIMEOUT = 20000; // 20 Seconds timeout
 
 export const getApiUrl = () => {
     const stored = localStorage.getItem(KEYS.API_URL);
@@ -31,11 +33,28 @@ export const clearCache = () => {
     localStorage.removeItem(KEYS.CACHE_LOGS);
     localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
     localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
+    localStorage.removeItem(KEYS.API_COOLDOWN);
+};
+
+// Helper: Normalize API response to Array
+const normalizeResponse = (data: any): any[] | null => {
+    if (Array.isArray(data)) return data;
+    if (data && typeof data === 'object') {
+        if (Array.isArray(data.data)) return data.data; // Wrapped { data: [] }
+        if (Object.keys(data).length === 0) return []; // Empty object {} -> []
+    }
+    return null;
 };
 
 const pendingRequests: Record<string, Promise<any>> = {};
 
 const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
+    // 1. Check Cooldown
+    const cooldownEnd = localStorage.getItem(KEYS.API_COOLDOWN);
+    if (cooldownEnd && Date.now() < parseInt(cooldownEnd)) {
+         throw new Error("ระบบกำลังพักการเชื่อมต่อ (Quota Limit) กรุณารอ 1 นาที");
+    }
+
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
@@ -47,16 +66,19 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         const queryParams = `action=${action}&${timestamp}`;
         const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
 
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
         const options: RequestInit = {
             method,
             mode: 'cors',
             credentials: 'omit',
             redirect: 'follow',
             headers: { "Content-Type": "text/plain" },
+            signal: controller.signal
         };
 
         if (method === 'POST') {
-            // Include action in body for robust parsing in new script
             options.body = JSON.stringify({ ...body, action }); 
         }
         
@@ -66,8 +88,10 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         for (let i = 0; i < RETRIES; i++) {
             try {
                 const res = await fetch(fetchUrl, options);
+                clearTimeout(timeoutId);
                 
                 if (res.status === 429) {
+                    localStorage.setItem(KEYS.API_COOLDOWN, (Date.now() + 60000).toString());
                     throw new Error("The quota has been exceeded. Please wait a minute.");
                 }
 
@@ -77,6 +101,7 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                 
                 if (text.trim().startsWith('<')) {
                     if (text.includes('quota') || text.includes('exceeded')) {
+                         localStorage.setItem(KEYS.API_COOLDOWN, (Date.now() + 60000).toString());
                          throw new Error("The quota has been exceeded. Please wait a minute.");
                     }
                     if (text.includes('Google Drive') || text.includes('script.google.com')) {
@@ -94,6 +119,10 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                     throw new Error(`Invalid response format: ${text.substring(0, 50)}...`);
                 }
             } catch (e: any) {
+                if (e.name === 'AbortError') {
+                    throw new Error("การเชื่อมต่อหมดเวลา (Timeout) กรุณาตรวจสอบอินเทอร์เน็ต");
+                }
+
                 console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
                 lastError = e;
                 if (e.message.includes('quota') || e.message.includes('exceeded')) break;
@@ -122,7 +151,8 @@ export const testApiConnection = async () => {
 export const testMasterDataAccess = async () => {
     try {
         const rawData = await callApi('getProducts', 'GET');
-        if (Array.isArray(rawData)) return { success: true, message: `Found ${rawData.length} products`, count: rawData.length };
+        const data = normalizeResponse(rawData);
+        if (data) return { success: true, message: `Found ${data.length} products`, count: data.length };
         return { success: false, error: `Invalid data: Expected Array, got ${typeof rawData}` };
     } catch (e: any) {
         return { success: false, error: e.message };
@@ -132,7 +162,8 @@ export const testMasterDataAccess = async () => {
 export const testQCLogAccess = async () => {
     try {
         const rawData = await callApi('getQCLogs', 'GET');
-        if (Array.isArray(rawData)) return { success: true, message: `Found ${rawData.length} logs`, count: rawData.length };
+        const data = normalizeResponse(rawData);
+        if (data) return { success: true, message: `Found ${data.length} logs`, count: data.length };
         return { success: false, error: `Invalid Format (${typeof rawData}): ${JSON.stringify(rawData).slice(0, 50)}` };
     } catch (e: any) {
         return { success: false, error: e.message };
@@ -180,17 +211,17 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
   if (cached && !forceUpdate) return JSON.parse(cached);
 
   if (forceUpdate && !skipThrottle && lastFetch && cached) {
-      if (Date.now() - new Date(lastFetch).getTime() < 60000) return JSON.parse(cached);
+      // Use CACHE_DURATION_MASTER (5 mins) instead of 1 min
+      if (Date.now() - new Date(lastFetch).getTime() < CACHE_DURATION_MASTER) return JSON.parse(cached);
   }
 
   try {
       if (!getApiUrl()) return [];
       const rawData = await callApi('getProducts', 'GET');
+      const data = normalizeResponse(rawData);
       
-      if (Array.isArray(rawData)) {
-          const mappedData: ProductMaster[] = rawData.map((item: any) => ({
-              // New script uses standardized keys ('barcode', 'productName')
-              // But keep fallbacks just in case
+      if (data) {
+          const mappedData: ProductMaster[] = data.map((item: any) => ({
               barcode: String(item.barcode || item['RMS Return Item ID'] || ''),
               productName: String(item.productName || item['Product Name'] || ''),
               costPrice: parseNum(item.costPrice || item['ต้นทุน']),
@@ -207,13 +238,16 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
       }
       return [];
   } catch (e: any) {
-      if (cached) return JSON.parse(cached);
+      // On error, ALWAYS return cache if available
+      if (cached) {
+          console.warn("Fetch failed, returning cache:", e.message);
+          return JSON.parse(cached);
+      }
       throw e;
   }
 };
 
 export const saveProduct = async (product: ProductMaster) => {
-  // New script expects direct keys matching config or headers
   const payload = {
       barcode: product.barcode,
       productName: product.productName,
@@ -246,7 +280,8 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
     }
 
     if (forceUpdate && !skipThrottle && lastFetch && cached) {
-        if (Date.now() - new Date(lastFetch).getTime() < 60000) {
+        // Use CACHE_DURATION_LOGS (2 mins)
+        if (Date.now() - new Date(lastFetch).getTime() < CACHE_DURATION_LOGS) {
             const parsed = JSON.parse(cached);
             return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
         }
@@ -255,9 +290,10 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
     try {
         if (!getApiUrl()) return [];
         const rawData = await callApi('getQCLogs', 'GET');
+        const data = normalizeResponse(rawData);
         
-        if (Array.isArray(rawData)) {
-            const processedData = rawData.map((item: any) => {
+        if (data) {
+            const processedData = data.map((item: any) => {
                  const rawImages = item.imageUrls || item['Images'] || []; 
                  let imageUrls: string[] = [];
                  if (Array.isArray(rawImages)) {
@@ -269,13 +305,10 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
                  }
 
                  let inferredStatus = QCStatus.PASS;
-                 // Check logical status if strict status field is missing
                  const rReason = item.reason || item['Comment'];
                  if ((rReason && rReason !== '-' && rReason !== '') || (item.sellingPrice === 0)) {
                     inferredStatus = QCStatus.DAMAGE;
                  }
-                 // If status field exists from new script, use it (though new script might not store explicit status if column missing)
-                 // We rely on logic mostly for now unless we add 'Status' column to Sheet
                  
                  return {
                      id: item.id || Math.random().toString(36),
@@ -303,14 +336,16 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
         }
         return [];
     } catch (e: any) {
-        if (cached) return JSON.parse(cached).sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        if (cached) {
+            console.warn("Fetch failed, returning cache:", e.message);
+            return JSON.parse(cached).sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        }
         throw e;
     }
 };
 
 export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) => {
   const timestamp = new Date().toISOString();
-  // Compatible with New GAS Script (Standard Keys)
   const payload = {
     lotNo: record.lotNo || '',
     productType: record.productType || '',
@@ -333,7 +368,6 @@ export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) =
 };
 
 export const setupGoogleSheet = async () => {
-    // Send a dummy record to trigger header creation in the new script
     const dummyPayload = {
         lotNo: 'SYSTEM_TEST',
         productType: 'TEST',
@@ -419,7 +453,6 @@ export const importMasterData = async (file: File): Promise<number> => {
           image: String(row['Image'] || ''),
         })).filter(p => p.barcode && p.productName);
 
-        // With new script, we can save parallel better or just loop
         for (const p of products) {
             await saveProduct(p);
         }

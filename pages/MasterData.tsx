@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster } from '../types';
@@ -58,17 +57,21 @@ export const MasterData: React.FC = () => {
     try {
         const fresh = await fetchMasterData(true, isManualRefresh);
         setProducts(fresh);
-        setIsLoading(false);
     } catch(e: any) {
         console.error(e);
         if (!hasCachedData) {
+            // Only show full page error if we have NO data
             setError(e.message || "Failed to load products");
         } else if (isManualRefresh) {
+            // If manual refresh failed but we have data, just alert
             if (e.message.includes('quota') || e.message.includes('exceeded')) {
-                 alert('⚠️ ระบบ Google ยุ่งอยู่ (Quota Exceeded) กรุณารอสักครู่แล้วลองใหม่');
+                 alert('⚠️ ระบบ Google ยุ่งอยู่ (Quota Exceeded) ข้อมูลที่แสดงเป็นข้อมูลล่าสุดที่มีอยู่');
             } else {
                  alert(`Update failed: ${e.message}`);
             }
+        } else {
+             // Background refresh failed, fail silently
+             console.warn("Background refresh failed, using cached data.");
         }
     } finally {
         setIsRefreshing(false);
