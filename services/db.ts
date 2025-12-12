@@ -16,7 +16,7 @@ const KEYS = {
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwQnrHQ4FL6bWpABG-416FJeUVvCpEQtYQCB41CF8Avbk5hqxPB255EHBtuNg9W95kH6Q/exec';
 const CACHE_DURATION_MASTER = 5 * 60 * 1000; // 5 Minutes
 const CACHE_DURATION_LOGS = 2 * 60 * 1000;   // 2 Minutes
-const REQUEST_TIMEOUT = 20000; // 20 Seconds timeout
+// No Timeout Limit
 
 export const getApiUrl = () => {
     const stored = localStorage.getItem(KEYS.API_URL);
@@ -66,16 +66,12 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         const queryParams = `action=${action}&${timestamp}`;
         const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-
         const options: RequestInit = {
             method,
             mode: 'cors',
             credentials: 'omit',
             redirect: 'follow',
             headers: { "Content-Type": "text/plain" },
-            signal: controller.signal
         };
 
         if (method === 'POST') {
@@ -88,7 +84,6 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         for (let i = 0; i < RETRIES; i++) {
             try {
                 const res = await fetch(fetchUrl, options);
-                clearTimeout(timeoutId);
                 
                 if (res.status === 429) {
                     localStorage.setItem(KEYS.API_COOLDOWN, (Date.now() + 60000).toString());
@@ -119,10 +114,6 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                     throw new Error(`Invalid response format: ${text.substring(0, 50)}...`);
                 }
             } catch (e: any) {
-                if (e.name === 'AbortError') {
-                    throw new Error("การเชื่อมต่อหมดเวลา (Timeout) กรุณาตรวจสอบอินเทอร์เน็ต");
-                }
-
                 console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
                 lastError = e;
                 if (e.message.includes('quota') || e.message.includes('exceeded')) break;
