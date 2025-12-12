@@ -9,14 +9,12 @@ const KEYS = {
   CACHE_LOGS: 'qc_cache_logs',
   CACHE_TIMESTAMP: 'qc_cache_time',
   CACHE_LOGS_TIMESTAMP: 'qc_cache_logs_time',
-  // Removed API_COOLDOWN
 };
 
 // --- CONFIGURATION ---
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwQnrHQ4FL6bWpABG-416FJeUVvCpEQtYQCB41CF8Avbk5hqxPB255EHBtuNg9W95kH6Q/exec';
 const CACHE_DURATION_MASTER = 5 * 60 * 1000; // 5 Minutes
 const CACHE_DURATION_LOGS = 2 * 60 * 1000;   // 2 Minutes
-// NO TIMEOUT LIMIT
 
 export const getApiUrl = () => {
     const stored = localStorage.getItem(KEYS.API_URL);
@@ -33,15 +31,15 @@ export const clearCache = () => {
     localStorage.removeItem(KEYS.CACHE_LOGS);
     localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
     localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
-    localStorage.removeItem('qc_api_cooldown'); // Clear old cooldown key if exists
+    localStorage.removeItem('qc_api_cooldown'); 
 };
 
 // Helper: Normalize API response to Array
 const normalizeResponse = (data: any): any[] | null => {
     if (Array.isArray(data)) return data;
     if (data && typeof data === 'object') {
-        if (Array.isArray(data.data)) return data.data; // Wrapped { data: [] }
-        if (Object.keys(data).length === 0) return []; // Empty object {} -> []
+        if (Array.isArray(data.data)) return data.data; 
+        if (Object.keys(data).length === 0) return []; 
     }
     return null;
 };
@@ -49,8 +47,6 @@ const normalizeResponse = (data: any): any[] | null => {
 const pendingRequests: Record<string, Promise<any>> = {};
 
 const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
-    // REMOVED: Cooldown check
-    
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
@@ -62,63 +58,74 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         const queryParams = `action=${action}&${timestamp}`;
         const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
 
-        // REMOVED: AbortController (Timeout)
-
         const options: RequestInit = {
             method,
             mode: 'cors',
             credentials: 'omit',
             redirect: 'follow',
             headers: { "Content-Type": "text/plain" },
-            // REMOVED: signal
         };
 
         if (method === 'POST') {
             options.body = JSON.stringify({ ...body, action }); 
         }
         
-        let lastError: any;
-        const RETRIES = 3; // Increase retries slightly since we have no timeout
-
-        for (let i = 0; i < RETRIES; i++) {
+        // Infinite Retry Loop for Resilience
+        while (true) {
             try {
                 const res = await fetch(fetchUrl, options);
                 
-                // REMOVED: Cooldown logic on 429
-                if (res.status === 429) {
-                    throw new Error("Google Server is busy (Quota Exceeded). Retrying...");
-                }
+                // Fatal Configuration Errors (Do not retry)
+                if (res.status === 404) throw new Error("API URL not found (404). Check Settings.");
+                if (res.status === 401 || res.status === 403) throw new Error("Permission Denied (401/403). Check script access.");
 
-                if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
+                // Retryable HTTP Errors (Quota 429, Server Error 5xx)
+                if (!res.ok) {
+                     console.warn(`HTTP ${res.status}. Retrying in 2s...`);
+                     await new Promise(r => setTimeout(r, 2000));
+                     continue;
+                }
                 
                 const text = await res.text();
                 
+                // Check for HTML Errors (Quota / Timeout often returns HTML)
                 if (text.trim().startsWith('<')) {
-                    if (text.includes('quota') || text.includes('exceeded')) {
-                         throw new Error("The quota has been exceeded.");
+                    // Check if it's a permanent permission error page
+                    if ((text.includes('Google Drive') || text.includes('script.google.com')) && 
+                        !text.includes('quota') && !text.includes('exceeded')) {
+                         throw new Error("Script Permission Error: Set 'Who has access' to 'Anyone'.");
                     }
-                    if (text.includes('Google Drive') || text.includes('script.google.com')) {
-                        throw new Error("Script Permission Error: Set 'Who has access' to 'Anyone'.");
-                    }
-                    throw new Error("Connection Blocked: The server returned HTML instead of JSON.");
+                    
+                    // Otherwise assume Quota/Timeout/Service Unavailable -> Retry
+                    console.warn("Received HTML error (likely Quota/Timeout). Retrying in 3s...");
+                    await new Promise(r => setTimeout(r, 3000));
+                    continue;
                 }
 
                 try {
                     const json = JSON.parse(text);
-                    if (json.error) throw new Error(json.error);
+                    if (json.error) {
+                        // Logic error from script (e.g., Missing action) -> Throw
+                        throw new Error(json.error);
+                    }
                     return json;
-                } catch (e) {
-                    console.error("JSON Parse Error:", text.substring(0, 100));
-                    throw new Error(`Invalid response format: ${text.substring(0, 50)}...`);
+                } catch (parseError: any) {
+                    // JSON Parse Error (Partial response/Network glitch) -> Retry
+                    console.warn("JSON Parse Error. Retrying...", text.substring(0, 50));
+                    await new Promise(r => setTimeout(r, 2000));
+                    continue;
                 }
             } catch (e: any) {
-                console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
-                lastError = e;
-                // Wait before retry (Exponential backoff)
-                if (i < RETRIES - 1) await new Promise(r => setTimeout(r, 2000 * Math.pow(2, i)));
+                // Network Fetch Failures (Offline)
+                // If specific fatal error, rethrow
+                if (e.message.includes("API URL") || e.message.includes("Permission") || e.message.includes("Missing action")) {
+                    throw e;
+                }
+                // Otherwise retry indefinitely
+                console.warn(`Network Error: ${e.message}. Retrying in 3s...`);
+                await new Promise(r => setTimeout(r, 3000));
             }
         }
-        throw lastError;
     };
 
     const promise = executeRequest();
@@ -130,8 +137,17 @@ export const testApiConnection = async () => {
     try {
       const url = getApiUrl().trim();
       if (!url) return { success: false, error: "URL is empty" };
-      await callApi('testConnection', 'GET');
-      return { success: true, message: `Server is reachable` };
+      // Use a simple fetch with timeout for testing connection to avoid infinite loop
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 10000);
+      try {
+          await fetch(`${url}?action=testConnection`, { signal: controller.signal, mode: 'cors' });
+          clearTimeout(id);
+          return { success: true, message: `Server is reachable` };
+      } catch (e) {
+          clearTimeout(id);
+          throw e;
+      }
     } catch (e: any) {
       return { success: false, error: e.message || "Network error" };
     }

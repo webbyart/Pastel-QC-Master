@@ -63,15 +63,7 @@ export const MasterData: React.FC = () => {
             // Only show full page error if we have NO data
             setError(e.message || "Failed to load products");
         } else if (isManualRefresh) {
-            // If manual refresh failed but we have data, just alert
-            if (e.message.includes('quota') || e.message.includes('exceeded')) {
-                 alert('⚠️ ระบบ Google ยุ่งอยู่ (Quota Exceeded) ข้อมูลที่แสดงเป็นข้อมูลล่าสุดที่มีอยู่');
-            } else {
-                 alert(`Update failed: ${e.message}`);
-            }
-        } else {
-             // Background refresh failed, fail silently
-             console.warn("Background refresh failed, using cached data.");
+             alert(`Update failed: ${e.message}`);
         }
     } finally {
         setIsRefreshing(false);
@@ -251,22 +243,12 @@ export const MasterData: React.FC = () => {
       {/* Content Area */}
       {error && products.length === 0 ? (
            <div className="flex flex-col items-center justify-center h-64 text-center p-6 bg-red-50 dark:bg-red-900/10 rounded-3xl border border-red-100 dark:border-red-900/30">
-              {error.includes('quota') || error.includes('exceeded') ? (
-                  <>
-                    <Clock size={48} className="text-orange-500 mb-4 animate-pulse" />
-                    <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ระบบกำลังทำงานหนัก (Quota Exceeded)</h3>
-                    <p className="text-gray-600 dark:text-gray-300 mb-4 max-w-xs">กรุณารอสักครู่ (ประมาณ 1 นาที) แล้วกดปุ่ม "อัปเดต" ใหม่อีกครั้ง</p>
-                  </>
-              ) : (
-                  <>
-                    <AlertCircle size={48} className="text-red-400 mb-4" />
-                    <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
-                    <p className="text-gray-500 mb-4">{error}</p>
-                    <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
-                        <Settings size={16} /> ตรวจสอบการตั้งค่า
-                    </button>
-                  </>
-              )}
+                <AlertCircle size={48} className="text-red-400 mb-4" />
+                <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
+                <p className="text-gray-500 mb-4">{error}</p>
+                <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
+                    <Settings size={16} /> ตรวจสอบการตั้งค่า
+                </button>
           </div>
       ) : isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
