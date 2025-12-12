@@ -9,14 +9,14 @@ const KEYS = {
   CACHE_LOGS: 'qc_cache_logs',
   CACHE_TIMESTAMP: 'qc_cache_time',
   CACHE_LOGS_TIMESTAMP: 'qc_cache_logs_time',
-  API_COOLDOWN: 'qc_api_cooldown'
+  // Removed API_COOLDOWN
 };
 
 // --- CONFIGURATION ---
 const DEFAULT_API_URL = 'https://script.google.com/macros/s/AKfycbwQnrHQ4FL6bWpABG-416FJeUVvCpEQtYQCB41CF8Avbk5hqxPB255EHBtuNg9W95kH6Q/exec';
 const CACHE_DURATION_MASTER = 5 * 60 * 1000; // 5 Minutes
 const CACHE_DURATION_LOGS = 2 * 60 * 1000;   // 2 Minutes
-// No Timeout Limit
+// NO TIMEOUT LIMIT
 
 export const getApiUrl = () => {
     const stored = localStorage.getItem(KEYS.API_URL);
@@ -33,7 +33,7 @@ export const clearCache = () => {
     localStorage.removeItem(KEYS.CACHE_LOGS);
     localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
     localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
-    localStorage.removeItem(KEYS.API_COOLDOWN);
+    localStorage.removeItem('qc_api_cooldown'); // Clear old cooldown key if exists
 };
 
 // Helper: Normalize API response to Array
@@ -49,12 +49,8 @@ const normalizeResponse = (data: any): any[] | null => {
 const pendingRequests: Record<string, Promise<any>> = {};
 
 const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: any) => {
-    // 1. Check Cooldown
-    const cooldownEnd = localStorage.getItem(KEYS.API_COOLDOWN);
-    if (cooldownEnd && Date.now() < parseInt(cooldownEnd)) {
-         throw new Error("ระบบกำลังพักการเชื่อมต่อ (Quota Limit) กรุณารอ 1 นาที");
-    }
-
+    // REMOVED: Cooldown check
+    
     const url = getApiUrl().trim();
     if (!url) throw new Error("Google Script URL not configured");
 
@@ -66,12 +62,15 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         const queryParams = `action=${action}&${timestamp}`;
         const fetchUrl = `${url}${url.includes('?') ? '&' : '?'}${queryParams}`;
 
+        // REMOVED: AbortController (Timeout)
+
         const options: RequestInit = {
             method,
             mode: 'cors',
             credentials: 'omit',
             redirect: 'follow',
             headers: { "Content-Type": "text/plain" },
+            // REMOVED: signal
         };
 
         if (method === 'POST') {
@@ -79,15 +78,15 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
         }
         
         let lastError: any;
-        const RETRIES = 2;
+        const RETRIES = 3; // Increase retries slightly since we have no timeout
 
         for (let i = 0; i < RETRIES; i++) {
             try {
                 const res = await fetch(fetchUrl, options);
                 
+                // REMOVED: Cooldown logic on 429
                 if (res.status === 429) {
-                    localStorage.setItem(KEYS.API_COOLDOWN, (Date.now() + 60000).toString());
-                    throw new Error("The quota has been exceeded. Please wait a minute.");
+                    throw new Error("Google Server is busy (Quota Exceeded). Retrying...");
                 }
 
                 if (!res.ok) throw new Error(`HTTP Error: ${res.status}`);
@@ -96,8 +95,7 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
                 
                 if (text.trim().startsWith('<')) {
                     if (text.includes('quota') || text.includes('exceeded')) {
-                         localStorage.setItem(KEYS.API_COOLDOWN, (Date.now() + 60000).toString());
-                         throw new Error("The quota has been exceeded. Please wait a minute.");
+                         throw new Error("The quota has been exceeded.");
                     }
                     if (text.includes('Google Drive') || text.includes('script.google.com')) {
                         throw new Error("Script Permission Error: Set 'Who has access' to 'Anyone'.");
@@ -116,8 +114,8 @@ const callApi = async (action: string, method: 'GET' | 'POST' = 'GET', body?: an
             } catch (e: any) {
                 console.warn(`API Attempt ${i + 1} failed: ${e.message}`);
                 lastError = e;
-                if (e.message.includes('quota') || e.message.includes('exceeded')) break;
-                if (i < RETRIES - 1) await new Promise(r => setTimeout(r, 1000 * Math.pow(2, i)));
+                // Wait before retry (Exponential backoff)
+                if (i < RETRIES - 1) await new Promise(r => setTimeout(r, 2000 * Math.pow(2, i)));
             }
         }
         throw lastError;
@@ -202,7 +200,6 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
   if (cached && !forceUpdate) return JSON.parse(cached);
 
   if (forceUpdate && !skipThrottle && lastFetch && cached) {
-      // Use CACHE_DURATION_MASTER (5 mins) instead of 1 min
       if (Date.now() - new Date(lastFetch).getTime() < CACHE_DURATION_MASTER) return JSON.parse(cached);
   }
 
@@ -229,7 +226,6 @@ export const fetchMasterData = async (forceUpdate = false, skipThrottle = false)
       }
       return [];
   } catch (e: any) {
-      // On error, ALWAYS return cache if available
       if (cached) {
           console.warn("Fetch failed, returning cache:", e.message);
           return JSON.parse(cached);
@@ -271,7 +267,6 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
     }
 
     if (forceUpdate && !skipThrottle && lastFetch && cached) {
-        // Use CACHE_DURATION_LOGS (2 mins)
         if (Date.now() - new Date(lastFetch).getTime() < CACHE_DURATION_LOGS) {
             const parsed = JSON.parse(cached);
             return parsed.sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

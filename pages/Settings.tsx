@@ -15,7 +15,6 @@ const CONFIG = {
   sheet_logs: 'QC_Logs',
   
   // Column Mapping (JSON Key -> Sheet Header)
-  // This allows the Frontend to send specific keys, and we map them to headers
   headers: {
     // Common
     'lotNo': 'Lot no.',
@@ -40,54 +39,51 @@ function doPost(e) { return handleRequest(e); }
 
 function handleRequest(e) {
   const lock = LockService.getScriptLock();
-  lock.tryLock(10000);
+  // Wait up to 30 seconds for other processes to finish.
+  lock.tryLock(30000);
 
   try {
-    // Handle both GET parameters and POST body
     let action = e.parameter.action;
     let payload = {};
     
     if (e.postData && e.postData.contents) {
-      const body = JSON.parse(e.postData.contents);
-      if (body.action) action = body.action;
-      payload = body;
+      try {
+        const body = JSON.parse(e.postData.contents);
+        if (body.action) action = body.action;
+        payload = body;
+      } catch (parseError) {
+        // Fallback if content is not JSON
+      }
     }
 
     if (!action) return response({ error: 'Missing action parameter' });
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // --- 1. GET PRODUCTS ---
     if (action === 'getProducts') {
       return response(readSheet(ss, CONFIG.sheet_master));
     }
 
-    // --- 2. GET QC LOGS ---
     if (action === 'getQCLogs') {
       return response(readSheet(ss, CONFIG.sheet_logs));
     }
 
-    // --- 3. SAVE QC RECORD (APPEND ONLY) ---
     if (action === 'saveQC') {
-      saveRow(ss, CONFIG.sheet_logs, payload, false); // false = append
+      saveRow(ss, CONFIG.sheet_logs, payload, false);
       return response({ success: true });
     }
 
-    // --- 4. SAVE PRODUCT (UPDATE OR APPEND) ---
     if (action === 'saveProduct') {
-      // Use 'barcode' (RMS Return Item ID) as the unique key to update
       saveRow(ss, CONFIG.sheet_master, payload, true, 'barcode'); 
       return response({ success: true });
     }
 
-    // --- 5. DELETE PRODUCT ---
     if (action === 'deleteProduct') {
       const barcode = e.parameter.barcode || payload.barcode;
       deleteRow(ss, CONFIG.sheet_master, 'barcode', barcode);
       return response({ success: true });
     }
 
-    // --- 6. TEST CONNECTION ---
     if (action === 'testConnection') {
       return response({ success: true, message: 'Connection OK', time: new Date() });
     }
@@ -95,40 +91,38 @@ function handleRequest(e) {
     return response({ error: 'Unknown action: ' + action });
 
   } catch (err) {
-    return response({ error: err.toString() });
+    return response({ error: 'Exception: ' + err.toString() });
   } finally {
     lock.releaseLock();
   }
 }
-
-// --- HELPER FUNCTIONS ---
 
 function response(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// Read sheet data and convert to Array of Objects
 function readSheet(ss, sheetName) {
   const sheet = ss.getSheetByName(sheetName);
   if (!sheet) return [];
   
-  const data = sheet.getDataRange().getValues();
-  if (data.length < 2) return []; // No data
+  const range = sheet.getDataRange();
+  if (range.isBlank()) return [];
+
+  const data = range.getValues();
+  if (data.length < 2) return []; 
   
   const headers = data[0];
   const rows = data.slice(1);
   
-  // Create a reverse mapping (Header Name -> JSON Key) for reading
   const reverseMap = {};
   for (let key in CONFIG.headers) {
     reverseMap[CONFIG.headers[key]] = key;
   }
 
   return rows.map((row, i) => {
-    let obj = { id: String(i) }; // Add row index as ID
+    let obj = { id: String(i) };
     headers.forEach((header, index) => {
-      // Use mapped key if exists, else use header name
       const key = reverseMap[header] || header;
       obj[key] = row[index];
     });
@@ -136,66 +130,56 @@ function readSheet(ss, sheetName) {
   });
 }
 
-// Save data (Append or Update)
 function saveRow(ss, sheetName, data, allowUpdate, uniqueKeyField) {
   let sheet = ss.getSheetByName(sheetName);
-  
-  // Create sheet if missing
-  if (!sheet) {
-    sheet = ss.insertSheet(sheetName);
-  }
+  if (!sheet) sheet = ss.insertSheet(sheetName);
 
-  // Get or Create Headers
   let headers = [];
   if (sheet.getLastRow() === 0) {
-    // If empty, create headers based on config + any extra keys in data
-    const predefined = Object.values(CONFIG.headers);
-    headers = [...predefined];
+    headers = Object.values(CONFIG.headers);
     sheet.appendRow(headers);
   } else {
     headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   }
 
-  // Prepare Row Data
   const rowValues = headers.map(header => {
-    // Find which key maps to this header
     let key = Object.keys(CONFIG.headers).find(k => CONFIG.headers[k] === header);
-    // If not found in map, try matching header directly (case insensitive)
     if (!key) key = header;
     
     let val = data[key];
-    
-    // Fallback: check if data has the header name directly
     if (val === undefined) val = data[header];
     
-    // Handle Arrays (like images)
-    if (Array.isArray(val)) return JSON.stringify(val);
+    // Sanitize Data to prevent "Too many arguments" or serialization errors
+    if (val === undefined || val === null) return '';
+    if (val instanceof Date) return val;
+    if (typeof val === 'number') return val;
+    if (typeof val === 'boolean') return val;
+    if (Array.isArray(val) || typeof val === 'object') return JSON.stringify(val);
     
-    return val === undefined || val === null ? '' : val;
+    return String(val);
   });
 
-  // Update Logic
   if (allowUpdate && uniqueKeyField && data[uniqueKeyField]) {
     const allData = sheet.getDataRange().getValues();
     const targetVal = String(data[uniqueKeyField]);
-    
-    // Find the column index for the unique key in the Sheet
-    // 1. Map uniqueKeyField ('barcode') -> Header Name ('RMS Return Item ID')
     const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
     const colIndex = headers.indexOf(headerName);
     
-    if (colIndex > -1) {
+    if (colIndex > -1 && allData.length > 1) {
       for (let i = 1; i < allData.length; i++) {
         if (String(allData[i][colIndex]) === targetVal) {
-          // Found match, update row
-          sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
+          // Update existing row
+          // i is index in allData (0-based). Header is 0. Row 1 data is 1.
+          // Sheet row is i + 1.
+          if (rowValues.length > 0) {
+             sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
+          }
           return;
         }
       }
     }
   }
 
-  // Default: Append
   sheet.appendRow(rowValues);
 }
 
@@ -204,12 +188,13 @@ function deleteRow(ss, sheetName, uniqueKeyField, value) {
   if (!sheet) return;
   
   const data = sheet.getDataRange().getValues();
+  if (data.length === 0) return;
+
   const headers = data[0];
-  
   const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
   const colIndex = headers.indexOf(headerName);
   
-  if (colIndex === -1) return; // Column not found
+  if (colIndex === -1) return; 
 
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][colIndex]) === String(value)) {
