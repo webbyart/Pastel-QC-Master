@@ -1,72 +1,45 @@
+
 import React, { useState, useEffect } from 'react';
-import { fetchMasterData, importMasterData, deleteProduct, saveProduct, compressImage, getApiUrl } from '../services/db';
-import { ProductMaster } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings, Clock } from 'lucide-react';
+import { fetchMasterData, importMasterData, deleteProduct, saveProduct, saveEditLogs, exportEditLogs, getEditLogs, clearEditLogs, getApiUrl, bulkSaveProducts, clearLocalMasterData, exportMasterData } from '../services/db';
+import { ProductMaster, ProductEditLog } from '../types';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings, Clock, FileDown, History, CloudUpload, Archive } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
 export const MasterData: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isImporting, setIsImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [hasApiUrl, setHasApiUrl] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<ProductMaster>>({});
+  const [originalProduct, setOriginalProduct] = useState<ProductMaster | null>(null);
 
   // Delete Confirm State
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData(false);
+    loadLocalData();
   }, []);
 
-  const loadData = async (isManualRefresh = false) => {
-    if (!getApiUrl()) {
-        setHasApiUrl(false);
-        setIsLoading(false);
-        return;
-    }
+  const loadLocalData = async () => {
+    if (!getApiUrl()) setHasApiUrl(false);
     
-    setError(null);
-    let hasCachedData = false;
-
-    // 1. Instant Cache Display
-    if (!isManualRefresh) {
-        try {
-            const cached = await fetchMasterData(false);
-            if (cached.length > 0) {
-                setProducts(cached);
-                setIsLoading(false);
-                hasCachedData = true;
-            }
-        } catch (e) {
-            console.warn("Cache load failed", e);
-        }
-    } else {
-        setIsRefreshing(true);
-    }
-    
-    // 2. Network Sync
+    // Always load from cache (localstorage) first. 
+    // We removed the auto-fetch from API logic here.
     try {
-        const fresh = await fetchMasterData(true, isManualRefresh);
-        setProducts(fresh);
-    } catch(e: any) {
-        console.error(e);
-        if (!hasCachedData) {
-            // Only show full page error if we have NO data
-            setError(e.message || "Failed to load products");
-        } else if (isManualRefresh) {
-             alert(`Update failed: ${e.message}`);
-        }
+        const cached = await fetchMasterData(false); // false = do not force network
+        setProducts(cached);
+    } catch (e) {
+        console.warn("Local load failed", e);
     } finally {
-        setIsRefreshing(false);
         setIsLoading(false);
     }
   };
@@ -74,26 +47,56 @@ export const MasterData: React.FC = () => {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setIsImporting(true);
-      setImportProgress(10);
       
       try {
-        const count = await importMasterData(e.target.files[0]);
-        setImportProgress(100);
+        // Fast Import: Reads Excel and updates LocalStorage directly. No API calls per row.
+        const newProducts = await importMasterData(e.target.files[0]);
+        setProducts(newProducts);
         
-        setTimeout(() => {
-            loadData(true); 
-            setIsImporting(false);
-            setImportProgress(0);
-            alert(`✨ นำเข้าข้อมูลสำเร็จ ${count} รายการ!`);
-        }, 500);
+        setIsImporting(false);
+        alert(`✨ นำเข้าข้อมูลสำเร็จ ${newProducts.length} รายการ!\n(ข้อมูลอยู่ในเครื่องแล้ว กด "บันทึกขึ้น Cloud" หากต้องการอัปเดต Google Sheet)`);
       } catch (err) {
         setIsImporting(false);
-        setImportProgress(0);
         alert('เกิดข้อผิดพลาดในการนำเข้า');
         console.error(err);
+      } finally {
+          // Reset input
+          e.target.value = '';
       }
     }
   };
+
+  const handleSyncToCloud = async () => {
+      if (products.length === 0) {
+          alert('ไม่มีข้อมูลให้บันทึก');
+          return;
+      }
+      if (!confirm(`ยืนยันการบันทึกสินค้า ${products.length} รายการไปยัง Google Sheet?\n\n(ข้อมูลเก่าใน Sheet "Scrap Crossborder" จะถูกแทนที่ทั้งหมด)`)) return;
+
+      setIsSyncing(true);
+      try {
+          await bulkSaveProducts(products);
+          alert('✅ บันทึกข้อมูลไปยัง Google Sheet เรียบร้อยแล้ว');
+      } catch (e: any) {
+          alert(`เกิดข้อผิดพลาด: ${e.message}`);
+      } finally {
+          setIsSyncing(false);
+      }
+  };
+
+  const handleClearAll = () => {
+      if (confirm('คุณต้องการ "ลบสินค้าทั้งหมด" ในเครื่องหรือไม่?')) {
+          clearLocalMasterData();
+          setProducts([]);
+      }
+  };
+
+  const handleExportExcel = () => {
+      const success = exportMasterData();
+      if (!success) alert('ไม่มีข้อมูลให้ส่งออก');
+  };
+
+  // --- Individual CRUD ---
 
   const handleDelete = (barcode: string) => {
     setDeleteId(barcode);
@@ -101,21 +104,31 @@ export const MasterData: React.FC = () => {
 
   const confirmDelete = async () => {
     if (deleteId) {
-        await deleteProduct(deleteId);
-        setProducts(products.filter(p => p.barcode !== deleteId));
+        // Since we are now "Offline First", we primarily update local state.
+        // If user wants to delete from cloud, they should Sync afterwards, OR we keep deleteProduct API call if desired.
+        // For consistency with the new bulk flow, let's update local and ask to sync, OR just delete locally.
+        // However, existing service deleteProduct calls API. Let's keep it mixed for single item edits.
+        
+        await deleteProduct(deleteId); // Delete from API
+        
+        // Update Local State
+        const updated = products.filter(p => p.barcode !== deleteId);
+        setProducts(updated);
         setDeleteId(null);
     }
   };
 
   const handleEdit = (product: ProductMaster) => {
     setIsEditMode(true);
-    setEditingProduct(product);
+    setEditingProduct({ ...product }); 
+    setOriginalProduct({ ...product }); 
     setShowModal(true);
   };
 
   const handleCreate = () => {
     setIsEditMode(false);
     setEditingProduct({});
+    setOriginalProduct(null);
     setShowModal(true);
   };
 
@@ -125,7 +138,8 @@ export const MasterData: React.FC = () => {
         alert('กรุณาระบุบาร์โค้ดและชื่อสินค้า');
         return;
     }
-    setIsLoading(true);
+    
+    // Save to API (Single item)
     await saveProduct({
         barcode: editingProduct.barcode,
         productName: editingProduct.productName,
@@ -136,8 +150,22 @@ export const MasterData: React.FC = () => {
         lotNo: editingProduct.lotNo,
         productType: editingProduct.productType
     });
+
+    // Update Local State manually to reflect changes immediately
+    const newItem = editingProduct as ProductMaster;
+    let newProducts = [...products];
+    const index = newProducts.findIndex(p => p.barcode === newItem.barcode);
+    if (index >= 0) {
+        newProducts[index] = newItem;
+    } else {
+        newProducts.push(newItem);
+    }
+    setProducts(newProducts);
+    
+    // Update Cache
+    localStorage.setItem('qc_cache_master', JSON.stringify(newProducts));
+    
     setShowModal(false);
-    loadData(true);
   };
 
   const filtered = products.filter(p => 
@@ -154,7 +182,7 @@ export const MasterData: React.FC = () => {
                   <Link size={48} className="text-red-500" />
               </div>
               <h2 className="text-2xl font-bold text-gray-800 dark:text-white mb-2">ยังไม่ได้เชื่อมต่อ Google Sheet</h2>
-              <p className="text-gray-500 mb-6 max-w-md">กรุณาไปที่เมนู "ตั้งค่า" แล้วระบุ Google Apps Script Web App URL เพื่อเริ่มต้นใช้งาน</p>
+              <p className="text-gray-500 mb-6 max-w-md">กรุณาไปที่เมนู "ตั้งค่า" เพื่อระบุ Web App URL</p>
               <button 
                 onClick={() => navigate('/settings')}
                 className="bg-pastel-blueDark text-white px-6 py-3 rounded-xl font-bold shadow-lg"
@@ -168,16 +196,6 @@ export const MasterData: React.FC = () => {
   return (
     <div className="space-y-6 pb-24 md:pb-0 animate-fade-in relative min-h-screen">
       
-      {/* Loading Overlay */}
-      {isRefreshing && products.length > 0 && (
-          <div className="absolute inset-0 bg-white/50 dark:bg-black/20 z-20 flex items-start justify-center pt-32 backdrop-blur-[1px]">
-              <div className="bg-white dark:bg-gray-800 px-6 py-3 rounded-full shadow-xl flex items-center gap-3 border border-gray-100 dark:border-gray-700 animate-slide-up">
-                  <Loader2 className="animate-spin text-pastel-blueDark" size={20} />
-                  <span className="font-medium text-sm text-gray-700 dark:text-gray-200">กำลังอัปเดตข้อมูลสินค้า...</span>
-              </div>
-          </div>
-      )}
-
       {/* Header Section */}
       <div className="flex flex-col gap-4 bg-gradient-to-r from-pastel-blue to-white dark:from-gray-800 dark:to-gray-900 p-6 -mx-4 md:-mx-8 md:rounded-b-3xl shadow-sm border-b border-gray-100 dark:border-gray-700">
         <div className="flex justify-between items-start">
@@ -186,7 +204,9 @@ export const MasterData: React.FC = () => {
                 <Box className="text-pastel-blueDark" />
                 คลังสินค้า (Scrap Crossborder)
             </h1>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">จัดการรายการสินค้าทั้งหมด {products.length} รายการ</p>
+            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+                จัดการรายการสินค้าทั้งหมด {products.length} รายการ (Local)
+            </p>
             </div>
             
             <button 
@@ -199,33 +219,44 @@ export const MasterData: React.FC = () => {
 
         {/* Action Bar */}
         <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
-            <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
-                <Upload size={16} />
-                <span>นำเข้า Excel (A:D)</span>
+            
+            {/* Import Button */}
+            <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 hover:bg-green-50 dark:hover:bg-green-900/20 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
+                {isImporting ? <Loader2 size={16} className="animate-spin"/> : <Upload size={16} />}
+                <span>นำเข้า Excel</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
             </label>
-            <button 
-                onClick={() => loadData(true)}
-                disabled={isRefreshing}
-                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95"
+
+            {/* Sync Cloud Button */}
+             <button 
+                onClick={handleSyncToCloud}
+                disabled={isSyncing || products.length === 0}
+                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-                <RefreshCw size={16} className={isRefreshing ? 'animate-spin' : ''} />
-                <span>อัปเดต</span>
+                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <CloudUpload size={16} />}
+                <span>บันทึกขึ้น Cloud</span>
+            </button>
+
+            {/* Export Button */}
+            <button 
+                onClick={handleExportExcel}
+                disabled={products.length === 0}
+                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
+            >
+                <FileDown size={16} />
+                <span>Export</span>
+            </button>
+
+            {/* Clear Button */}
+            <button 
+                onClick={handleClearAll}
+                disabled={products.length === 0}
+                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+            >
+                <Archive size={16} />
+                <span>เคลียร์รายการ</span>
             </button>
         </div>
-
-        {/* Import Progress Bar */}
-        {isImporting && (
-             <div className="w-full bg-gray-200 rounded-full h-2.5 dark:bg-gray-700 overflow-hidden relative">
-                <div 
-                    className="bg-pastel-greenDark h-2.5 rounded-full transition-all duration-300 ease-out flex items-center justify-center relative" 
-                    style={{ width: `${importProgress}%` }}
-                >
-                    <div className="absolute top-0 bottom-0 left-0 right-0 bg-white/20 animate-pulse"></div>
-                </div>
-                <span className="absolute right-0 -top-4 text-xs font-bold text-gray-500">{Math.round(importProgress)}%</span>
-             </div>
-        )}
 
         {/* Search */}
         <div className="relative">
@@ -241,16 +272,7 @@ export const MasterData: React.FC = () => {
       </div>
 
       {/* Content Area */}
-      {error && products.length === 0 ? (
-           <div className="flex flex-col items-center justify-center h-64 text-center p-6 bg-red-50 dark:bg-red-900/10 rounded-3xl border border-red-100 dark:border-red-900/30">
-                <AlertCircle size={48} className="text-red-400 mb-4" />
-                <h3 className="text-xl font-bold text-gray-700 dark:text-gray-300">เกิดข้อผิดพลาด</h3>
-                <p className="text-gray-500 mb-4">{error}</p>
-                <button onClick={() => navigate('/settings')} className="text-blue-500 hover:underline flex items-center gap-1">
-                    <Settings size={16} /> ตรวจสอบการตั้งค่า
-                </button>
-          </div>
-      ) : isLoading && products.length === 0 ? (
+      {isLoading ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark mb-4" />
               <p>กำลังโหลดข้อมูล...</p>
@@ -263,16 +285,15 @@ export const MasterData: React.FC = () => {
             </div>
             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ไม่พบสินค้า</h3>
             <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-xs mx-auto">
-                ไม่พบข้อมูลใน Sheet "Scrap Crossborder" หรือนำเข้าจาก Excel
+                {products.length === 0 ? 'กรุณานำเข้าไฟล์ Excel สินค้าเพื่อเริ่มใช้งาน' : 'ไม่พบข้อมูลที่ค้นหา'}
             </p>
-            <button 
-                onClick={() => loadData(true)}
-                disabled={isRefreshing}
-                className="flex items-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
-            >
-                <RefreshCw size={20} className={isRefreshing ? 'animate-spin' : ''} />
-                <span>ดึงข้อมูลจาก Google Sheet</span>
-            </button>
+             {products.length === 0 && (
+                <label className="flex items-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all active:scale-95 cursor-pointer">
+                    <Upload size={20} />
+                    <span>นำเข้าไฟล์ Excel</span>
+                    <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
+                </label>
+             )}
         </div>
       ) : (
         // Desktop Table View
@@ -284,7 +305,8 @@ export const MasterData: React.FC = () => {
                         <th className="p-4 font-medium">Lot No.</th>
                         <th className="p-4 font-medium">Type</th>
                         <th className="p-4 font-medium">ชื่อสินค้า</th>
-                        {/* Hidden Cost/Price Columns (A:D Only) */}
+                        <th className="p-4 font-medium">ต้นทุน</th>
+                        <th className="p-4 font-medium">ราคาขาย</th>
                         <th className="p-4 font-medium text-right pr-6">จัดการ</th>
                     </tr>
                 </thead>
@@ -299,6 +321,12 @@ export const MasterData: React.FC = () => {
                                  ) : '-'}
                              </td>
                             <td className="p-4 font-bold text-gray-800 dark:text-white">{product.productName}</td>
+                            <td className="p-4 text-gray-600 dark:text-gray-300 font-mono">
+                                {product.costPrice ? product.costPrice.toLocaleString() : '-'}
+                            </td>
+                            <td className="p-4 text-gray-600 dark:text-gray-300 font-mono">
+                                {product.unitPrice ? product.unitPrice.toLocaleString() : '-'}
+                            </td>
                             <td className="p-4 text-right pr-6">
                                 <div className="flex justify-end gap-2">
                                     <button onClick={() => handleEdit(product)} className="p-2 text-blue-500 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
@@ -335,7 +363,7 @@ export const MasterData: React.FC = () => {
                 
                 <h3 className="font-bold text-gray-800 dark:text-white mb-2">{product.productName}</h3>
                 
-                <div className="flex items-center gap-2 mt-2">
+                <div className="flex flex-wrap items-center gap-2 mt-2">
                     {product.lotNo && (
                         <span className="text-xs bg-gray-100 dark:bg-gray-700 px-2 py-1 rounded text-gray-600 dark:text-gray-300">
                             Lot: {product.lotNo}
@@ -346,6 +374,10 @@ export const MasterData: React.FC = () => {
                             Type: {product.productType}
                         </span>
                     )}
+                </div>
+                <div className="flex justify-between mt-3 pt-2 border-t border-gray-100 dark:border-gray-700">
+                    <div className="text-xs text-gray-500">ต้นทุน: {product.costPrice || '-'}</div>
+                    <div className="text-xs text-gray-500">ราคา: {product.unitPrice || '-'}</div>
                 </div>
              </div>
         ))}
@@ -442,10 +474,9 @@ export const MasterData: React.FC = () => {
 
                     <button 
                         type="submit" 
-                        disabled={isLoading}
-                        className="w-full bg-gradient-to-r from-pastel-blueDark to-blue-600 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/30 transform active:scale-95 transition-all mt-4 disabled:opacity-50"
+                        className="w-full bg-gradient-to-r from-pastel-blueDark to-blue-600 hover:from-blue-700 hover:to-blue-800 text-white font-bold py-4 rounded-2xl shadow-lg shadow-blue-500/30 transform active:scale-95 transition-all mt-4"
                     >
-                        {isLoading ? <Loader2 className="animate-spin mx-auto" /> : (isEditMode ? 'บันทึกการแก้ไข' : 'สร้างสินค้า')}
+                        {isEditMode ? 'บันทึกการแก้ไข' : 'สร้างสินค้า'}
                     </button>
                 </form>
             </div>
@@ -462,7 +493,7 @@ export const MasterData: React.FC = () => {
                  </div>
                  <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">ยืนยันการลบสินค้า?</h3>
                  <p className="text-gray-500 dark:text-gray-400 text-sm mb-6">
-                     คุณแน่ใจหรือไม่ที่จะลบสินค้านี้ การกระทำนี้ไม่สามารถย้อนกลับได้
+                     คุณแน่ใจหรือไม่ที่จะลบสินค้านี้
                  </p>
                  <div className="flex gap-3">
                      <button 

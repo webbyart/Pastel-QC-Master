@@ -1,14 +1,19 @@
-
 import React, { useState, useEffect } from 'react';
-import { fetchQCLogs, exportQCLogs } from '../services/db';
+import { fetchQCLogs, exportQCLogs, importQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList, ImageIcon } from 'lucide-react';
+import { Download, Upload, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList, ImageIcon } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<QCRecord[]>([]);
+  
+  // Export State
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  
+  // Import State
+  const [isImporting, setIsImporting] = useState(false);
+  
   const [isLoading, setIsLoading] = useState(true);
   
   // Filters
@@ -113,6 +118,28 @@ export const Report: React.FC = () => {
     }
   };
 
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+        if(!confirm('การนำเข้าข้อมูลอาจใช้เวลาสักครู่ ขึ้นอยู่กับจำนวนรายการ\nต้องการดำเนินการต่อหรือไม่?')) {
+            e.target.value = ''; // Reset input
+            return;
+        }
+
+        setIsImporting(true);
+        try {
+            const count = await importQCLogs(e.target.files[0]);
+            alert(`✨ นำเข้าข้อมูลเรียบร้อย ${count} รายการ!`);
+            loadData(true); // Refresh data
+        } catch (err: any) {
+            alert(`เกิดข้อผิดพลาดในการนำเข้า: ${err.message}`);
+            console.error(err);
+        } finally {
+            setIsImporting(false);
+            e.target.value = ''; // Reset input
+        }
+    }
+  };
+
   return (
     <div className="space-y-6 pb-24 md:pb-0 animate-fade-in">
        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -131,10 +158,22 @@ export const Report: React.FC = () => {
             >
                 <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
             </button>
+            
+            {/* Import Button */}
+            <label className={`
+                flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-blue/50 text-blue-600 dark:text-blue-300 px-5 py-3 rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer hover:bg-blue-50 dark:hover:bg-gray-600
+                ${isImporting ? 'opacity-70 cursor-not-allowed' : ''}
+            `}>
+                {isImporting ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                <span className="font-medium">{isImporting ? 'กำลังนำเข้า...' : 'นำเข้า Excel'}</span>
+                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImport} disabled={isImporting} />
+            </label>
+
+            {/* Export Button */}
             <button 
-            onClick={handleExport}
-            disabled={isExporting || isLoading}
-            className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting || isLoading ? 'cursor-not-allowed opacity-70' : ''}`}
+                onClick={handleExport}
+                disabled={isExporting || isLoading || isImporting}
+                className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting || isLoading || isImporting ? 'cursor-not-allowed opacity-70' : ''}`}
             >
             {isExporting && (
                 <div className="absolute inset-0 bg-green-700/50">

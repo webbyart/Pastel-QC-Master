@@ -10,28 +10,8 @@ import { useNavigate } from 'react-router-dom';
 const GOOGLE_SCRIPT_CODE = `
 // --- CONFIGURATION ---
 const CONFIG = {
-  // Exact Sheet Names
   sheet_master: 'Scrap Crossborder', 
-  sheet_logs: 'QC_Logs',
-  
-  // Column Mapping (JSON Key -> Sheet Header)
-  headers: {
-    // Common
-    'lotNo': 'Lot no.',
-    'productType': 'Type',
-    'barcode': 'RMS Return Item ID',
-    'productName': 'Product Name',
-    'unitPrice': 'Product unit price',
-    'costPrice': 'ต้นทุน',
-    'sellingPrice': 'ราคาขาย',
-    
-    // QC Specific
-    'reason': 'Comment',
-    'remark': 'Remark',
-    'inspectorId': 'Inspector',
-    'timestamp': 'Timestamp',
-    'imageUrls': 'Images'
-  }
+  sheet_logs: 'QC_Logs'
 };
 
 function doGet(e) { return handleRequest(e); }
@@ -39,48 +19,103 @@ function doPost(e) { return handleRequest(e); }
 
 function handleRequest(e) {
   const lock = LockService.getScriptLock();
-  // Wait up to 30 seconds for other processes to finish.
   lock.tryLock(30000);
 
   try {
-    let action = e.parameter.action;
-    let payload = {};
+    var action = e.parameter.action;
+    var payload = {};
     
     if (e.postData && e.postData.contents) {
       try {
-        const body = JSON.parse(e.postData.contents);
+        var body = JSON.parse(e.postData.contents);
         if (body.action) action = body.action;
         payload = body;
-      } catch (parseError) {
-        // Fallback if content is not JSON
-      }
+      } catch (parseError) { }
     }
 
     if (!action) return response({ error: 'Missing action parameter' });
 
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
 
     if (action === 'getProducts') {
-      return response(readSheet(ss, CONFIG.sheet_master));
+      return response(readSheetRobust(ss, CONFIG.sheet_master, 'product'));
     }
 
     if (action === 'getQCLogs') {
-      return response(readSheet(ss, CONFIG.sheet_logs));
+      return response(readSheetRobust(ss, CONFIG.sheet_logs, 'log'));
     }
 
     if (action === 'saveQC') {
-      saveRow(ss, CONFIG.sheet_logs, payload, false);
+      var flatData = {
+        'RMS Return Item ID': payload.barcode,
+        'Product Name': payload.productName,
+        'ต้นทุน': payload.costPrice,
+        'ราคาขาย': payload.sellingPrice,
+        'Product unit price': payload.unitPrice,
+        'Comment': payload.reason,
+        'Remark': payload.remark,
+        'Inspector': payload.inspectorId,
+        'Lot no.': payload.lotNo,
+        'Type': payload.productType,
+        'Timestamp': payload.timestamp,
+        'Images': Array.isArray(payload.imageUrls) ? JSON.stringify(payload.imageUrls) : payload.imageUrls
+      };
+      saveRow(ss, CONFIG.sheet_logs, flatData);
       return response({ success: true });
     }
 
     if (action === 'saveProduct') {
-      saveRow(ss, CONFIG.sheet_master, payload, true, 'barcode'); 
+      var flatData = {
+        'RMS Return Item ID': payload.barcode,
+        'Product Name': payload.productName,
+        'ต้นทุน': payload.costPrice,
+        'Product unit price': payload.unitPrice,
+        'Lot no.': payload.lotNo,
+        'Type': payload.productType,
+        'Stock': payload.stock,
+        'Image': payload.image
+      };
+      saveRow(ss, CONFIG.sheet_master, flatData, 'RMS Return Item ID'); 
       return response({ success: true });
+    }
+    
+    if (action === 'replaceProducts') {
+      // Bulk replacement for master data
+      var products = payload.products;
+      if (!Array.isArray(products)) return response({ error: 'Invalid products array' });
+      
+      var sheet = ss.getSheetByName(CONFIG.sheet_master);
+      if (!sheet) sheet = ss.insertSheet(CONFIG.sheet_master);
+      
+      sheet.clearContents();
+      
+      // Headers
+      var headers = ['RMS Return Item ID', 'Lot no.', 'Type', 'Product Name', 'ต้นทุน', 'Product unit price', 'Stock'];
+      sheet.appendRow(headers);
+      
+      if (products.length > 0) {
+        var rows = products.map(function(p) {
+          return [
+             p.barcode || '',
+             p.lotNo || '',
+             p.productType || '',
+             p.productName || '',
+             p.costPrice || 0,
+             p.unitPrice || 0,
+             p.stock || 0
+          ];
+        });
+        
+        // Write in batch
+        sheet.getRange(2, 1, rows.length, headers.length).setValues(rows);
+      }
+      
+      return response({ success: true, count: products.length });
     }
 
     if (action === 'deleteProduct') {
-      const barcode = e.parameter.barcode || payload.barcode;
-      deleteRow(ss, CONFIG.sheet_master, 'barcode', barcode);
+      var barcode = e.parameter.barcode || payload.barcode;
+      deleteRow(ss, CONFIG.sheet_master, 'RMS Return Item ID', barcode);
       return response({ success: true });
     }
 
@@ -102,78 +137,103 @@ function response(data) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-function readSheet(ss, sheetName) {
-  const sheet = ss.getSheetByName(sheetName);
+function readSheetRobust(ss, sheetName, type) {
+  var sheet = ss.getSheetByName(sheetName);
   if (!sheet) return [];
   
-  const range = sheet.getDataRange();
+  var range = sheet.getDataRange();
   if (range.isBlank()) return [];
 
-  const data = range.getValues();
+  var data = range.getDisplayValues();
   if (data.length < 2) return []; 
   
-  const headers = data[0];
-  const rows = data.slice(1);
+  var headers = data[0];
+  var rows = data.slice(1);
   
-  const reverseMap = {};
-  for (let key in CONFIG.headers) {
-    reverseMap[CONFIG.headers[key]] = key;
+  var headerMap = {};
+  for (var h = 0; h < headers.length; h++) {
+    var cleanHeader = String(headers[h]).trim().toLowerCase();
+    headerMap[cleanHeader] = h;
+  }
+  
+  function getColIdx(possibleNames) {
+    for (var i = 0; i < possibleNames.length; i++) {
+      var name = possibleNames[i].toLowerCase();
+      if (headerMap.hasOwnProperty(name)) return headerMap[name];
+    }
+    return -1;
   }
 
-  return rows.map((row, i) => {
-    let obj = { id: String(i) };
-    headers.forEach((header, index) => {
-      const key = reverseMap[header] || header;
-      obj[key] = row[index];
-    });
-    return obj;
+  return rows.map(function(row, i) {
+    var getValue = function(keys) {
+      var idx = getColIdx(keys);
+      return idx !== -1 ? row[idx] : "";
+    };
+
+    if (type === 'product') {
+      return {
+        id: String(i + 2),
+        barcode: getValue(['RMS Return Item ID', 'Barcode', 'RMS ID', 'barcode', 'id']),
+        productName: getValue(['Product Name', 'Name', 'productName', 'Title']),
+        costPrice: getValue(['ต้นทุน', 'Cost', 'Cost Price', 'costPrice']),
+        unitPrice: getValue(['Product unit price', 'Unit Price', 'Price', 'unitPrice']),
+        lotNo: getValue(['Lot no.', 'Lot', 'LotNo', 'lotNo']),
+        productType: getValue(['Type', 'Product Type', 'productType']),
+        stock: getValue(['Stock', 'Qty', 'Quantity']),
+        image: getValue(['Image', 'Images', 'Img'])
+      };
+    } else {
+      return {
+        id: String(i + 2),
+        barcode: getValue(['RMS Return Item ID', 'Barcode', 'RMS ID', 'barcode']),
+        productName: getValue(['Product Name', 'Name', 'productName']),
+        costPrice: getValue(['ต้นทุน', 'Cost', 'Cost Price']),
+        sellingPrice: getValue(['ราคาขาย', 'Selling Price', 'sellingPrice', 'Price']),
+        unitPrice: getValue(['Product unit price', 'Unit Price']),
+        reason: getValue(['Comment', 'Reason', 'Note']),
+        remark: getValue(['Remark', 'remark']),
+        inspectorId: getValue(['Inspector', 'User', 'inspectorId']),
+        timestamp: getValue(['Timestamp', 'Date', 'Time']),
+        imageUrls: getValue(['Images', 'Image', 'imageUrls']),
+        lotNo: getValue(['Lot no.', 'Lot', 'LotNo']),
+        productType: getValue(['Type', 'Product Type'])
+      };
+    }
   });
 }
 
-function saveRow(ss, sheetName, data, allowUpdate, uniqueKeyField) {
-  let sheet = ss.getSheetByName(sheetName);
+function saveRow(ss, sheetName, dataObj, uniqueKeyHeader) {
+  var sheet = ss.getSheetByName(sheetName);
   if (!sheet) sheet = ss.insertSheet(sheetName);
 
-  let headers = [];
-  if (sheet.getLastRow() === 0) {
-    headers = Object.values(CONFIG.headers);
+  var lastRow = sheet.getLastRow();
+  var headers = [];
+  
+  if (lastRow === 0) {
+    headers = Object.keys(dataObj);
     sheet.appendRow(headers);
   } else {
     headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   }
 
-  const rowValues = headers.map(header => {
-    let key = Object.keys(CONFIG.headers).find(k => CONFIG.headers[k] === header);
-    if (!key) key = header;
-    
-    let val = data[key];
-    if (val === undefined) val = data[header];
-    
-    // Sanitize Data to prevent "Too many arguments" or serialization errors
-    if (val === undefined || val === null) return '';
-    if (val instanceof Date) return val;
-    if (typeof val === 'number') return val;
-    if (typeof val === 'boolean') return val;
-    if (Array.isArray(val) || typeof val === 'object') return JSON.stringify(val);
-    
-    return String(val);
+  var rowValues = headers.map(function(header) {
+    var val = dataObj[header];
+    if (val === undefined) {
+       var key = Object.keys(dataObj).find(k => k.toLowerCase() === String(header).toLowerCase());
+       val = key ? dataObj[key] : "";
+    }
+    return String(val); 
   });
 
-  if (allowUpdate && uniqueKeyField && data[uniqueKeyField]) {
-    const allData = sheet.getDataRange().getValues();
-    const targetVal = String(data[uniqueKeyField]);
-    const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
-    const colIndex = headers.indexOf(headerName);
+  if (uniqueKeyHeader) {
+    var allData = sheet.getDataRange().getValues();
+    var headerIdx = headers.indexOf(uniqueKeyHeader);
+    var updateTarget = String(dataObj[uniqueKeyHeader]);
     
-    if (colIndex > -1 && allData.length > 1) {
-      for (let i = 1; i < allData.length; i++) {
-        if (String(allData[i][colIndex]) === targetVal) {
-          // Update existing row
-          // i is index in allData (0-based). Header is 0. Row 1 data is 1.
-          // Sheet row is i + 1.
-          if (rowValues.length > 0) {
-             sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
-          }
+    if (headerIdx > -1 && allData.length > 1) {
+      for (var i = 1; i < allData.length; i++) {
+        if (String(allData[i][headerIdx]) === updateTarget) {
+          sheet.getRange(i + 1, 1, 1, rowValues.length).setValues([rowValues]);
           return;
         }
       }
@@ -183,21 +243,23 @@ function saveRow(ss, sheetName, data, allowUpdate, uniqueKeyField) {
   sheet.appendRow(rowValues);
 }
 
-function deleteRow(ss, sheetName, uniqueKeyField, value) {
-  const sheet = ss.getSheetByName(sheetName);
+function deleteRow(ss, sheetName, keyHeader, value) {
+  var sheet = ss.getSheetByName(sheetName);
   if (!sheet) return;
   
-  const data = sheet.getDataRange().getValues();
+  var data = sheet.getDataRange().getValues();
   if (data.length === 0) return;
-
-  const headers = data[0];
-  const headerName = CONFIG.headers[uniqueKeyField] || uniqueKeyField;
-  const colIndex = headers.indexOf(headerName);
   
-  if (colIndex === -1) return; 
+  var headers = data[0];
+  var colIdx = headers.indexOf(keyHeader);
+  if (colIdx === -1) {
+     colIdx = headers.findIndex(h => String(h).toLowerCase() === String(keyHeader).toLowerCase());
+  }
+  
+  if (colIdx === -1) return; 
 
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][colIndex]) === String(value)) {
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][colIdx]) === String(value)) {
       sheet.deleteRow(i + 1);
       return; 
     }
@@ -466,7 +528,7 @@ export const Settings: React.FC = () => {
                             <div>
                                 <h4 className="font-bold text-gray-800 dark:text-white text-sm">Google Apps Script</h4>
                                 <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
-                                    รับโค้ด Script ล่าสุดเพื่อแก้ไขปัญหา "Invalid Format"
+                                    รับโค้ด Script ล่าสุดเพื่อแก้ไขปัญหา "Invalid Format" และรองรับ Bulk Upload
                                 </p>
                             </div>
                         </div>

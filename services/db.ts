@@ -1,4 +1,4 @@
-import { ProductMaster, QCRecord, QCStatus, User } from '../types';
+import { ProductMaster, QCRecord, QCStatus, User, ProductEditLog } from '../types';
 import * as XLSX from 'xlsx';
 
 // Storage Keys
@@ -9,6 +9,7 @@ const KEYS = {
   CACHE_LOGS: 'qc_cache_logs',
   CACHE_TIMESTAMP: 'qc_cache_time',
   CACHE_LOGS_TIMESTAMP: 'qc_cache_logs_time',
+  EDIT_LOGS: 'qc_edit_logs_mock', // Stores the history of edits
 };
 
 // --- CONFIGURATION ---
@@ -262,16 +263,75 @@ export const saveProduct = async (product: ProductMaster) => {
       productType: product.productType
   };
   const result = await callApi('saveProduct', 'POST', payload);
-  localStorage.removeItem(KEYS.CACHE_MASTER); 
-  localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
+  // Do NOT clear cache here if we want to maintain local state until sync
   return result;
+};
+
+export const bulkSaveProducts = async (products: ProductMaster[]) => {
+    // Transform to simple array for API to reduce payload size complexity if needed,
+    // but the script expects objects.
+    const payload = {
+        products: products.map(p => ({
+            barcode: p.barcode,
+            productName: p.productName,
+            costPrice: p.costPrice,
+            unitPrice: p.unitPrice,
+            lotNo: p.lotNo,
+            productType: p.productType,
+            stock: p.stock,
+            image: p.image
+        }))
+    };
+    return await callApi('replaceProducts', 'POST', payload);
 };
 
 export const deleteProduct = async (barcode: string) => {
   await callApi('deleteProduct', 'POST', { barcode });
-  localStorage.removeItem(KEYS.CACHE_MASTER);
-  localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
+  // Update Local Cache
+  const current = JSON.parse(localStorage.getItem(KEYS.CACHE_MASTER) || '[]');
+  const updated = current.filter((p: ProductMaster) => p.barcode !== barcode);
+  localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(updated));
 };
+
+// --- EDIT LOGGING SYSTEM ---
+
+export const getEditLogs = (): ProductEditLog[] => {
+    const str = localStorage.getItem(KEYS.EDIT_LOGS);
+    return str ? JSON.parse(str) : [];
+};
+
+export const saveEditLogs = (newLogs: ProductEditLog[]) => {
+    const existing = getEditLogs();
+    const updated = [...existing, ...newLogs];
+    localStorage.setItem(KEYS.EDIT_LOGS, JSON.stringify(updated));
+};
+
+export const clearEditLogs = () => {
+    localStorage.removeItem(KEYS.EDIT_LOGS);
+};
+
+export const exportEditLogs = (): boolean => {
+    const logs = getEditLogs();
+    if (logs.length === 0) return false;
+
+    const exportData = logs.map(log => ({
+        'Timestamp': new Date(log.timestamp).toLocaleString('th-TH'),
+        'Modified By': log.editedBy,
+        'RMS ID (Barcode)': log.barcode,
+        'Product Name': log.productName,
+        'Field Changed': log.field,
+        'Old Value': log.oldValue,
+        'New Value': log.newValue
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Edit_History_Mock_Data");
+    XLSX.writeFile(wb, `QC_Product_Edit_History_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return true;
+};
+
+// --- END EDIT LOGGING SYSTEM ---
 
 export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Promise<QCRecord[]> => {
     const cached = localStorage.getItem(KEYS.CACHE_LOGS);
@@ -302,6 +362,7 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
                      imageUrls = rawImages;
                  } else if (typeof rawImages === 'string' && rawImages.trim() !== '') {
                      try {
+                        // Handle both JSON array string and comma separated
                         imageUrls = rawImages.startsWith('[') ? JSON.parse(rawImages) : rawImages.split(',').map(s => s.trim());
                      } catch { imageUrls = []; }
                  }
@@ -331,7 +392,11 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
                  };
             });
 
-            const sorted = processedData.filter((i: any) => i.barcode).sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+            // Filter out empty rows but be permissive about barcode if product name exists
+            const sorted = processedData
+                .filter((i: any) => i.barcode || i.productName) 
+                .sort((a: any,b: any) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+                
             localStorage.setItem(KEYS.CACHE_LOGS, JSON.stringify(sorted));
             localStorage.setItem(KEYS.CACHE_LOGS_TIMESTAMP, new Date().toISOString());
             return sorted;
@@ -347,7 +412,7 @@ export const fetchQCLogs = async (forceUpdate = false, skipThrottle = false): Pr
 };
 
 export const saveQCRecord = async (record: Omit<QCRecord, 'id' | 'timestamp'>) => {
-  const timestamp = new Date().toISOString();
+  const timestamp = record['timestamp'] || new Date().toISOString(); // Use existing timestamp if provided (for import)
   const payload = {
     lotNo: record.lotNo || '',
     productType: record.productType || '',
@@ -433,7 +498,8 @@ export const compressImage = (file: File): Promise<string> => {
     })
 }
 
-export const importMasterData = async (file: File): Promise<number> => {
+// FAST IMPORT: Just parses and returns data. Does NOT call API.
+export const importMasterData = async (file: File): Promise<ProductMaster[]> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async (e) => {
@@ -445,22 +511,21 @@ export const importMasterData = async (file: File): Promise<number> => {
         const json = XLSX.utils.sheet_to_json(sheet);
 
         const products: ProductMaster[] = json.map((row: any) => ({
-          barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || ''),
+          barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || row['RMS ID'] || ''),
           productName: String(row['Product Name'] || row['ProductName'] || row['Name'] || ''),
           costPrice: parseNum(row['ต้นทุน'] || row['CostPrice'] || row['Cost']),
-          unitPrice: parseNum(row['Product unit price'] || row['UnitPrice'] || row['Price']),
+          unitPrice: parseNum(row['Product unit price'] || row['UnitPrice'] || row['Price'] || row['Unit Price']),
           lotNo: String(row['Lot no.'] || row['Lot'] || row['LotNo'] || ''),
           productType: String(row['Type'] || row['ProductType'] || ''),
           stock: parseNum(row['Stock'] || row['Qty']),
           image: String(row['Image'] || ''),
         })).filter(p => p.barcode && p.productName);
 
-        for (const p of products) {
-            await saveProduct(p);
-        }
-        localStorage.removeItem(KEYS.CACHE_MASTER);
-        localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
-        resolve(products.length);
+        // Update Local Cache immediately
+        localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(products));
+        localStorage.setItem(KEYS.CACHE_TIMESTAMP, new Date().toISOString());
+
+        resolve(products);
       } catch (err) {
         reject(err);
       }
@@ -468,4 +533,76 @@ export const importMasterData = async (file: File): Promise<number> => {
     reader.onerror = (err) => reject(err);
     reader.readAsBinaryString(file);
   });
+};
+
+export const clearLocalMasterData = () => {
+    localStorage.removeItem(KEYS.CACHE_MASTER);
+    localStorage.removeItem(KEYS.CACHE_TIMESTAMP);
+};
+
+export const exportMasterData = () => {
+    const dataStr = localStorage.getItem(KEYS.CACHE_MASTER);
+    const data: ProductMaster[] = dataStr ? JSON.parse(dataStr) : [];
+    
+    if (data.length === 0) return false;
+
+    const exportData = data.map(p => ({
+        'RMS Return Item ID': p.barcode,
+        'Product Name': p.productName,
+        'Lot no.': p.lotNo,
+        'Type': p.productType,
+        'ต้นทุน': p.costPrice,
+        'Product unit price': p.unitPrice,
+        'Stock': p.stock || 0
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Scrap Crossborder");
+    XLSX.writeFile(wb, `Products_Master_${new Date().toISOString().slice(0,10)}.xlsx`);
+    return true;
+};
+
+export const importQCLogs = async (file: File): Promise<number> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = e.target?.result;
+          const workbook = XLSX.read(data, { type: 'binary' });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const json = XLSX.utils.sheet_to_json(sheet);
+  
+          // Map Excel rows to QCRecord objects
+          const records: any[] = json.map((row: any) => ({
+             barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['RMS ID'] || row['barcode'] || ''),
+             productName: String(row['Product Name'] || row['ProductName'] || row['Name'] || ''),
+             costPrice: parseNum(row['ต้นทุน'] || row['Cost'] || row['CostPrice']),
+             sellingPrice: parseNum(row['ราคาขาย'] || row['Selling Price'] || row['Price']),
+             unitPrice: parseNum(row['Product unit price'] || row['Unit Price'] || row['UnitPrice']),
+             reason: String(row['Comment'] || row['Reason'] || row['Note'] || ''),
+             remark: String(row['Remark'] || row['remark'] || ''),
+             inspectorId: String(row['Inspector'] || row['User'] || 'Imported'),
+             timestamp: row['Timestamp'] || row['Date'] || new Date().toISOString(),
+             lotNo: String(row['Lot no.'] || row['Lot'] || row['LotNo'] || ''),
+             productType: String(row['Type'] || row['Product Type'] || row['ProductType'] || ''),
+             imageUrls: row['Images'] ? (String(row['Images']).startsWith('[') ? JSON.parse(String(row['Images'])) : [String(row['Images'])]) : [],
+             status: QCStatus.PASS // Default, will be derived logic in saveQCRecord implies status
+          })).filter(r => r.barcode || r.productName);
+  
+          for (const r of records) {
+              await saveQCRecord(r);
+          }
+          
+          localStorage.removeItem(KEYS.CACHE_LOGS);
+          localStorage.removeItem(KEYS.CACHE_LOGS_TIMESTAMP);
+          resolve(records.length);
+        } catch (err) {
+          reject(err);
+        }
+      };
+      reader.onerror = (err) => reject(err);
+      reader.readAsBinaryString(file);
+    });
 };

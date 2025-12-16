@@ -55,3 +55,14 @@ export interface FilterOptions {
   status: QCStatus | 'All';
   search: string;
 }
+
+export interface ProductEditLog {
+  id: string;
+  barcode: string;
+  productName: string;
+  field: string;
+  oldValue: string | number;
+  newValue: string | number;
+  editedBy: string;
+  timestamp: string;
+}
