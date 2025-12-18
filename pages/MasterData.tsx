@@ -195,11 +195,11 @@ export const MasterData: React.FC = () => {
       <div className="bg-white dark:bg-gray-800 p-5 -mx-4 md:mx-0 md:rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col gap-4">
         <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-3">
             <div>
-                <h1 className="text-2xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                <h1 className="text-xl md:text-2xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-2">
                     <Box className="text-pastel-blueDark" size={24} />
-                    รายการสินค้า
+                    สินค้าในคลัง
                 </h1>
-                <p className="text-gray-500 dark:text-gray-400 text-xs mt-0.5">
+                <p className="text-gray-500 dark:text-gray-400 text-[10px] md:text-xs mt-0.5 font-medium">
                     จัดการข้อมูลสินค้าด้วย Excel (Import &rarr; Validate &rarr; Save to Cloud)
                 </p>
             </div>
@@ -212,14 +212,14 @@ export const MasterData: React.FC = () => {
         </div>
 
         {/* Action Bar - Refined */}
-        <div className="flex flex-wrap items-center gap-2 p-3 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-gray-100 dark:border-gray-700">
+        <div className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-gray-100 dark:border-gray-700">
             <div className="flex items-center gap-2">
                 <span className="flex items-center justify-center w-5 h-5 rounded-full bg-pastel-blueDark text-white text-[10px] font-bold">1</span>
                 <label className={`
-                    flex items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-pastel-green text-green-700 dark:text-green-400 px-3 py-2 rounded-xl text-xs font-bold cursor-pointer transition-all shadow-sm active:scale-95 hover:bg-green-50 dark:hover:bg-green-900/20
+                    flex items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-pastel-green text-green-700 dark:text-green-400 px-3 py-1.5 rounded-xl text-[11px] font-bold cursor-pointer transition-all shadow-sm active:scale-95 hover:bg-green-50 dark:hover:bg-green-900/20
                     ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}
                 `}>
-                    {isImporting ? <Loader2 size={16} className="animate-spin"/> : <FileSpreadsheet size={16} />}
+                    {isImporting ? <Loader2 size={14} className="animate-spin"/> : <FileSpreadsheet size={14} />}
                     <span>อัปโหลด Excel</span>
                     <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
                 </label>
@@ -230,27 +230,27 @@ export const MasterData: React.FC = () => {
                  <button 
                     onClick={handleSyncToCloud}
                     disabled={isSyncing || products.length === 0}
-                    className="flex items-center justify-center gap-2 bg-pastel-blueDark text-white px-3 py-2 rounded-xl text-xs font-bold transition-all shadow-md shadow-blue-500/20 active:scale-95 hover:bg-sky-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
+                    className="flex items-center justify-center gap-2 bg-pastel-blueDark text-white px-3 py-1.5 rounded-xl text-[11px] font-bold transition-all shadow-md shadow-blue-500/20 active:scale-95 hover:bg-sky-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
                 >
-                    {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <CloudUpload size={16} />}
+                    {isSyncing ? <Loader2 size={14} className="animate-spin" /> : <CloudUpload size={14} />}
                     <span>บันทึกขึ้น Cloud</span>
                 </button>
             </div>
             <div className="flex-1" />
-            <div className="flex gap-1.5">
+            <div className="flex gap-1">
                  <button 
                     onClick={handleExportExcel}
                     disabled={products.length === 0}
-                    className="flex items-center justify-center gap-1.5 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2.5 py-2 rounded-xl text-[11px] font-bold transition-all hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                    className="flex items-center justify-center gap-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-2 py-1.5 rounded-xl text-[10px] font-bold transition-all hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                 >
-                    <FileDown size={14} /> Export
+                    <FileDown size={12} /> Export
                 </button>
                 <button 
                     onClick={handleClearAll}
                     disabled={products.length === 0 || isClearing}
-                    className="flex items-center justify-center gap-1.5 bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900/30 text-red-500 dark:text-red-400 px-2.5 py-2 rounded-xl text-[11px] font-bold transition-all hover:bg-red-50 dark:hover:bg-red-900/10 disabled:opacity-50"
+                    className="flex items-center justify-center gap-1 bg-white dark:bg-gray-800 border border-red-100 dark:border-red-900/30 text-red-500 dark:text-red-400 px-2 py-1.5 rounded-xl text-[10px] font-bold transition-all hover:bg-red-50 dark:hover:bg-red-900/10 disabled:opacity-50"
                 >
-                    {isClearing ? <Loader2 size={14} className="animate-spin"/> : <Trash2 size={14} />} 
+                    {isClearing ? <Loader2 size={12} className="animate-spin"/> : <Trash2 size={12} />} 
                     Clear
                 </button>
             </div>
@@ -264,16 +264,16 @@ export const MasterData: React.FC = () => {
                 placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า..." 
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-9 pr-4 py-2.5 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-sm focus:ring-2 focus:ring-pastel-blue focus:outline-none dark:text-white shadow-inner"
+                className="w-full pl-9 pr-4 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl text-xs focus:ring-2 focus:ring-pastel-blue focus:outline-none dark:text-white shadow-inner"
             />
         </div>
       </div>
 
-      {/* Content Area - Typography refinements */}
+      {/* Content Area - Compact Typography */}
       {isLoading ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Loader2 size={32} className="animate-spin text-pastel-blueDark mb-3" />
-              <p className="text-xs">กำลังโหลดข้อมูล...</p>
+              <p className="text-[10px] font-bold tracking-widest uppercase">Loading Inventory...</p>
           </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 px-4 text-center animate-slide-up">
@@ -293,10 +293,10 @@ export const MasterData: React.FC = () => {
       ) : (
         <div className="hidden md:block bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
              <div className="p-2 bg-blue-50 dark:bg-blue-900/10 border-b border-blue-100 dark:border-blue-800/30 flex justify-between items-center px-5">
-                <span className="text-[11px] font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider">Preview ({filtered.length} items)</span>
+                <span className="text-[10px] font-black uppercase text-blue-600 dark:text-blue-400 tracking-wider">Preview ({filtered.length} items)</span>
              </div>
             <table className="w-full text-left">
-                <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-400 text-[11px] uppercase font-bold tracking-widest">
+                <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-400 text-[10px] uppercase font-bold tracking-widest border-b border-gray-100 dark:border-gray-700">
                     <tr>
                         <th className="p-3 pl-6">RMS ID / Barcode</th>
                         <th className="p-3">Lot / Type</th>
@@ -305,34 +305,34 @@ export const MasterData: React.FC = () => {
                         <th className="p-3 text-right pr-6">จัดการ</th>
                     </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
                     {filtered.map(product => (
                         <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors group">
-                            <td className="p-3 pl-6">
-                                <span className="font-mono text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900 px-2 py-0.5 rounded">{product.barcode}</span>
+                            <td className="p-2.5 pl-6">
+                                <span className="font-mono text-[11px] text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900 px-2 py-0.5 rounded">{product.barcode}</span>
                             </td>
-                            <td className="p-3">
-                                <div className="flex flex-col gap-0.5">
-                                    <span className="text-xs text-gray-600 dark:text-gray-300 font-medium">Lot: {product.lotNo || '-'}</span>
-                                    <span className="text-[10px] text-gray-400 uppercase font-bold">{product.productType || 'N/A'}</span>
-                                </div>
-                            </td>
-                            <td className="p-3">
-                                <p className="text-[13px] font-bold text-gray-800 dark:text-white line-clamp-1">{product.productName}</p>
-                            </td>
-                            <td className="p-3">
+                            <td className="p-2.5">
                                 <div className="flex flex-col">
-                                    <span className="text-xs text-gray-500">Cost: <span className="font-mono">฿{product.costPrice?.toLocaleString() || '0'}</span></span>
-                                    <span className="text-[11px] text-pastel-blueDark font-bold">Unit: ฿{product.unitPrice?.toLocaleString() || '0'}</span>
+                                    <span className="text-[11px] text-gray-600 dark:text-gray-300 font-bold">Lot: {product.lotNo || '-'}</span>
+                                    <span className="text-[9px] text-gray-400 uppercase font-black tracking-tight">{product.productType || 'N/A'}</span>
                                 </div>
                             </td>
-                            <td className="p-3 text-right pr-6">
+                            <td className="p-2.5">
+                                <p className="text-xs font-bold text-gray-800 dark:text-white line-clamp-1 max-w-xs">{product.productName}</p>
+                            </td>
+                            <td className="p-2.5">
+                                <div className="flex flex-col">
+                                    <span className="text-[10px] text-gray-500">ทุน: <span className="font-mono font-bold">฿{product.costPrice?.toLocaleString() || '0'}</span></span>
+                                    <span className="text-[11px] text-pastel-blueDark font-black">ขาย: ฿{product.unitPrice?.toLocaleString() || '0'}</span>
+                                </div>
+                            </td>
+                            <td className="p-2.5 text-right pr-6">
                                 <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                                     <button onClick={() => handleEdit(product)} className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg">
-                                        <Edit2 size={14} />
+                                        <Edit2 size={12} />
                                     </button>
                                     <button onClick={() => handleDelete(product.barcode)} className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg">
-                                        <Trash2 size={14} />
+                                        <Trash2 size={12} />
                                     </button>
                                 </div>
                             </td>
@@ -344,29 +344,29 @@ export const MasterData: React.FC = () => {
       )}
 
       {/* Mobile Grid View - Typography refinements */}
-      <div className="md:hidden grid grid-cols-1 gap-3">
+      <div className="md:hidden grid grid-cols-1 gap-2">
         {filtered.map((product) => (
              <div 
                 key={product.barcode} 
-                className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-3.5"
+                className="bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 p-3"
              >
                 <div className="flex justify-between items-start mb-1.5">
-                    <span className="text-[10px] font-black text-pastel-blueDark bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded tracking-tighter">ID: {product.barcode}</span>
-                    <div className="flex gap-3">
-                            <button onClick={() => handleEdit(product)} className="text-blue-500"><Edit2 size={14} /></button>
-                            <button onClick={() => handleDelete(product.barcode)} className="text-red-500"><Trash2 size={14} /></button>
+                    <span className="text-[9px] font-black text-pastel-blueDark bg-blue-50 dark:bg-blue-900/30 px-2 py-0.5 rounded tracking-tighter">ID: {product.barcode}</span>
+                    <div className="flex gap-2">
+                            <button onClick={() => handleEdit(product)} className="text-blue-500 p-1"><Edit2 size={12} /></button>
+                            <button onClick={() => handleDelete(product.barcode)} className="text-red-500 p-1"><Trash2 size={12} /></button>
                     </div>
                 </div>
                 
-                <h3 className="text-[13px] font-bold text-gray-800 dark:text-white mb-2 leading-tight">{product.productName}</h3>
+                <h3 className="text-xs font-bold text-gray-800 dark:text-white mb-1.5 leading-tight line-clamp-2">{product.productName}</h3>
                 
-                <div className="flex flex-wrap items-center gap-1.5">
-                    <span className="text-[10px] bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded text-gray-500 border border-gray-100 dark:border-gray-700">Lot: {product.lotNo || '-'}</span>
-                    <span className="text-[10px] bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded text-gray-500 border border-gray-100 dark:border-gray-700 uppercase">{product.productType || 'N/A'}</span>
+                <div className="flex flex-wrap items-center gap-1">
+                    <span className="text-[9px] bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded text-gray-500 border border-gray-100 dark:border-gray-700 font-bold">L: {product.lotNo || '-'}</span>
+                    <span className="text-[9px] bg-gray-50 dark:bg-gray-900 px-1.5 py-0.5 rounded text-gray-400 border border-gray-100 dark:border-gray-700 uppercase font-black">{product.productType || 'N/A'}</span>
                 </div>
-                <div className="flex justify-between mt-3 pt-2 border-t border-gray-50 dark:border-gray-700/50">
-                    <div className="text-[11px] text-gray-400">ทุน: <span className="font-mono text-gray-600 dark:text-gray-300 font-bold">฿{product.costPrice || '0'}</span></div>
-                    <div className="text-[11px] text-gray-400">ราคาขาย: <span className="font-mono text-pastel-blueDark font-bold">฿{product.unitPrice || '0'}</span></div>
+                <div className="flex justify-between mt-2 pt-1.5 border-t border-gray-50 dark:border-gray-700/50">
+                    <div className="text-[10px] text-gray-400 font-medium">ทุน: <span className="font-mono text-gray-600 dark:text-gray-300 font-bold">฿{product.costPrice || '0'}</span></div>
+                    <div className="text-[10px] text-gray-400 font-medium">ขาย: <span className="font-mono text-pastel-blueDark font-bold">฿{product.unitPrice || '0'}</span></div>
                 </div>
              </div>
         ))}

@@ -11,6 +11,7 @@ const KEYS = {
   CACHE_LOGS: 'qc_cache_logs',
 };
 
+// Default credentials for immediate connection
 const DEFAULT_SUPABASE_URL = 'https://qxqcimcauwvrwafltzfg.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4cWNpbWNhdXd2cndhZmx0emZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMDcxMjYsImV4cCI6MjA4MTU4MzEyNn0.N_EJbZNHnL0HL5luJOo0QJJruV_U47RNOr0qdzM-pno';
 
@@ -87,21 +88,27 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         const res = await fetch(endpoint, options);
         
         if (!res.ok) {
-            const errData = await res.json();
+            const errText = await res.text();
+            let errData: any = {};
+            try { errData = JSON.parse(errText); } catch(e) {}
+            
             let msg = errData.message || `Supabase Error ${res.status}`;
             
-            // Catch specific PostgREST "Table not found" error
             if (msg.includes("Could not find the table") || msg.includes("schema cache")) {
                 const error: any = new Error(`TABLE_NOT_FOUND:${table}`);
                 error.tableName = table;
                 throw error;
             }
-            
             throw new Error(msg);
         }
         
+        // Fix: Properly handle 204 No Content or empty responses
         if (res.status === 204) return true;
-        return await res.json();
+        
+        const responseText = await res.text();
+        if (!responseText) return true;
+        
+        return JSON.parse(responseText);
     } catch (e: any) {
         console.error(`Supabase call failed [${table}]:`, e);
         if (e.message.startsWith('TABLE_NOT_FOUND')) throw e;
@@ -123,29 +130,29 @@ export const testApiConnection = async (testUrl?: string, testKey?: string) => {
     if (!config.url || !config.key) return { success: false, error: "Configuration missing" };
     
     try {
-        // Step 1: Check connectivity
         const res = await fetch(`${config.url}/rest/v1/`, {
             method: 'GET',
             headers: { 'apikey': config.key, 'Authorization': `Bearer ${config.key}` }
         });
 
         if (!res.ok) {
-            const err = await res.json();
-            return { success: false, error: err.message || "Failed to connect to API" };
+            const errText = await res.text();
+            let errData: any = {};
+            try { errData = JSON.parse(errText); } catch(e) {}
+            return { success: false, error: errData.message || "Failed to connect to API" };
         }
 
-        // Step 2: Check for required tables
         const tablesRes = await fetch(`${config.url}/rest/v1/products?select=barcode&limit=1`, {
             method: 'GET',
             headers: { 'apikey': config.key, 'Authorization': `Bearer ${config.key}` }
         });
 
         if (!tablesRes.ok) {
-            const err = await tablesRes.json();
-            if (err.message?.includes("Could not find the table")) {
+            const errText = await tablesRes.text();
+            if (errText.includes("Could not find the table")) {
                 return { success: false, error: "CONNECTED_BUT_TABLES_MISSING" };
             }
-            return { success: false, error: err.message };
+            return { success: false, error: "Table verification failed" };
         }
         
         return { success: true, message: "Connected and tables found!" };

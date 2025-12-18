@@ -302,15 +302,15 @@ export const Dashboard: React.FC = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 h-80 flex flex-col">
+        <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col min-h-[400px]">
           <h3 className="text-lg font-bold mb-6 text-gray-800 dark:text-white border-l-4 border-pastel-blueDark pl-3">สัดส่วนคุณภาพ</h3>
-          <div className="flex-1 min-h-0">
+          <div className="flex-1 w-full" style={{ minHeight: '280px' }}>
             <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                 <Pie
                     data={pieData}
-                    innerRadius={60}
-                    outerRadius={85}
+                    innerRadius={70}
+                    outerRadius={95}
                     paddingAngle={8}
                     dataKey="value"
                     stroke="none"
