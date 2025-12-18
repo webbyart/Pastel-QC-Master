@@ -1,424 +1,174 @@
-import React, { useState, useEffect } from 'react';
-import { fetchQCLogs, exportQCLogs, importQCLogs } from '../services/db';
+
+import React, { useState, useEffect, useMemo } from 'react';
+import { fetchQCLogs, exportQCLogs } from '../services/db';
 import { QCRecord, QCStatus } from '../types';
-import { Download, Upload, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, Tag, ChevronDown, MessageSquare, RefreshCw, ClipboardList, ImageIcon } from 'lucide-react';
+import { Download, Filter, Search, Loader2, Calendar, FileText, CheckCircle2, AlertTriangle, User, RefreshCw, ClipboardList, ImageIcon, DollarSign, TrendingUp, AlertCircle } from 'lucide-react';
 
 export const Report: React.FC = () => {
   const [logs, setLogs] = useState<QCRecord[]>([]);
   const [filteredLogs, setFilteredLogs] = useState<QCRecord[]>([]);
-  
-  // Export State
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportProgress, setExportProgress] = useState(0);
-  
-  // Import State
-  const [isImporting, setIsImporting] = useState(false);
-  
   const [isLoading, setIsLoading] = useState(true);
+  const [isExporting, setIsExporting] = useState(false);
   
   // Filters
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<QCStatus | 'All'>('All');
   const [dateFilter, setDateFilter] = useState('');
-  const [inspectorFilter, setInspectorFilter] = useState('All');
-  const [commentFilter, setCommentFilter] = useState('All');
 
-  // Derived Data
-  const inspectors = Array.from(new Set(logs.map(l => l.inspectorId)));
-  // Extract unique comments (reasons), filter out empty ones
-  const comments = Array.from(new Set(logs.map(l => l.reason).filter(r => r && r.trim() !== ''))).sort();
+  useEffect(() => { loadData(); }, []);
 
-  useEffect(() => {
-    loadData(false);
-  }, []);
-
-  const loadData = async (forceUpdate = false) => {
-      // 1. Load from cache first
-      if (!forceUpdate) {
-        try {
-            const cached = await fetchQCLogs(false);
-            setLogs(cached);
-            setIsLoading(false);
-        } catch (e) {
-            console.warn("Cache load error in Report", e);
-        }
-      } else {
-        setIsLoading(true);
-      }
-
-      // 2. Fetch fresh
-      try {
-          const fresh = await fetchQCLogs(true, true); // Force refresh with skipThrottle
-          setLogs(fresh);
-      } catch(e) {
-          console.error("Fetch fresh logs error:", e);
-          // Do nothing in UI if fresh fetch fails, keep showing cache
-      } finally {
-          setIsLoading(false);
-      }
+  const loadData = async (force = false) => {
+    setIsLoading(true);
+    try {
+        const data = await fetchQCLogs(force);
+        setLogs(data);
+    } catch (e) { console.error(e); }
+    finally { setIsLoading(false); }
   };
+
+  const summaryStats = useMemo(() => {
+    const passed = logs.filter(l => l.status === QCStatus.PASS);
+    const damaged = logs.filter(l => l.status === QCStatus.DAMAGE);
+    return {
+        passCount: passed.length,
+        passCost: passed.reduce((sum, l) => sum + l.costPrice, 0),
+        passValue: passed.reduce((sum, l) => sum + l.sellingPrice, 0),
+        damageCount: damaged.length,
+        damageCost: damaged.reduce((sum, l) => sum + l.costPrice, 0),
+        damageValue: damaged.reduce((sum, l) => sum + l.sellingPrice, 0),
+    };
+  }, [logs]);
 
   useEffect(() => {
     let result = logs;
-
     if (search) {
       const lower = search.toLowerCase();
-      result = result.filter(l => 
-        l.productName.toLowerCase().includes(lower) || 
-        l.barcode.includes(lower) ||
-        l.inspectorId.toLowerCase().includes(lower) ||
-        (l.rmsId && l.rmsId.toLowerCase().includes(lower))
-      );
+      result = result.filter(l => l.productName.toLowerCase().includes(lower) || l.barcode.includes(lower));
     }
-
-    if (statusFilter !== 'All') {
-      result = result.filter(l => l.status === statusFilter);
-    }
-
-    if (inspectorFilter !== 'All') {
-      result = result.filter(l => l.inspectorId === inspectorFilter);
-    }
-
-    if (commentFilter !== 'All') {
-      result = result.filter(l => l.reason === commentFilter);
-    }
-
-    if (dateFilter) {
-      result = result.filter(l => l.timestamp.startsWith(dateFilter));
-    }
-
+    if (statusFilter !== 'All') result = result.filter(l => l.status === statusFilter);
+    if (dateFilter) result = result.filter(l => l.timestamp.startsWith(dateFilter));
     setFilteredLogs(result);
-  }, [logs, search, statusFilter, dateFilter, inspectorFilter, commentFilter]);
-
-  const handleExport = async () => {
-    setIsExporting(true);
-    setExportProgress(0);
-    
-    // Simulate Progress
-    const interval = setInterval(() => {
-        setExportProgress(prev => {
-            if (prev >= 95) return prev;
-            return prev + 5;
-        });
-    }, 50);
-
-    try {
-        await exportQCLogs();
-        clearInterval(interval);
-        setExportProgress(100);
-        setTimeout(() => {
-            setIsExporting(false);
-            setExportProgress(0);
-        }, 500);
-    } catch (e) {
-        clearInterval(interval);
-        setIsExporting(false);
-        console.error(e);
-        alert('การส่งออกข้อมูลล้มเหลว ลองใหม่อีกครั้ง');
-    }
-  };
-
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-        if(!confirm('การนำเข้าข้อมูลอาจใช้เวลาสักครู่ ขึ้นอยู่กับจำนวนรายการ\nต้องการดำเนินการต่อหรือไม่?')) {
-            e.target.value = ''; // Reset input
-            return;
-        }
-
-        setIsImporting(true);
-        try {
-            const count = await importQCLogs(e.target.files[0]);
-            alert(`✨ นำเข้าข้อมูลเรียบร้อย ${count} รายการ!`);
-            loadData(true); // Refresh data
-        } catch (err: any) {
-            alert(`เกิดข้อผิดพลาดในการนำเข้า: ${err.message}`);
-            console.error(err);
-        } finally {
-            setIsImporting(false);
-            e.target.value = ''; // Reset input
-        }
-    }
-  };
+  }, [logs, search, statusFilter, dateFilter]);
 
   return (
-    <div className="space-y-6 pb-24 md:pb-0 animate-fade-in">
-       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+    <div className="space-y-6 pb-24 animate-fade-in">
+      <header className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold text-gray-800 dark:text-white flex items-center gap-2">
-            <FileText className="text-pastel-purpleDark" />
-            รายงาน (Reports)
-          </h1>
-          <p className="text-gray-500 dark:text-gray-400">ประวัติการตรวจสอบคุณภาพสินค้า (QC Logs)</p>
+          <h1 className="text-3xl font-bold text-gray-800 dark:text-white">รายงานสรุปผล</h1>
+          <p className="text-gray-500">ประวัติการตรวจสอบและการเงิน</p>
         </div>
-        
         <div className="flex gap-2">
+            <button onClick={() => loadData(true)} className="p-3 bg-white dark:bg-gray-800 rounded-xl shadow-sm"><RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} /></button>
             <button 
-                onClick={() => loadData(true)}
-                className="flex items-center justify-center p-3 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-600 transition-colors shadow-sm text-gray-600 dark:text-gray-300"
+                onClick={async () => { setIsExporting(true); await exportQCLogs(); setIsExporting(false); }}
+                disabled={isExporting}
+                className="flex items-center gap-2 bg-pastel-greenDark text-white px-5 py-3 rounded-xl shadow-lg hover:scale-105 transition-transform"
             >
-                <RefreshCw size={18} className={isLoading ? 'animate-spin' : ''} />
-            </button>
-            
-            {/* Import Button */}
-            <label className={`
-                flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-blue/50 text-blue-600 dark:text-blue-300 px-5 py-3 rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer hover:bg-blue-50 dark:hover:bg-gray-600
-                ${isImporting ? 'opacity-70 cursor-not-allowed' : ''}
-            `}>
-                {isImporting ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
-                <span className="font-medium">{isImporting ? 'กำลังนำเข้า...' : 'นำเข้า Excel'}</span>
-                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleImport} disabled={isImporting} />
-            </label>
-
-            {/* Export Button */}
-            <button 
-                onClick={handleExport}
-                disabled={isExporting || isLoading || isImporting}
-                className={`relative overflow-hidden flex items-center justify-center gap-2 bg-pastel-greenDark hover:bg-green-800 text-white px-5 py-3 rounded-xl transition-all shadow-md active:scale-95 ${isExporting || isLoading || isImporting ? 'cursor-not-allowed opacity-70' : ''}`}
-            >
-            {isExporting && (
-                <div className="absolute inset-0 bg-green-700/50">
-                    <div 
-                        className="h-full bg-green-600 transition-all duration-100 ease-linear" 
-                        style={{ width: `${exportProgress}%` }} 
-                    />
-                </div>
-            )}
-            <div className="relative z-10 flex items-center gap-2">
-                {isExporting ? <Loader2 size={18} className="animate-spin" /> : <Download size={18} />}
-                <span className="font-medium">{isExporting ? `กำลังส่งออก ${exportProgress}%` : 'ส่งออก Excel'}</span>
-            </div>
+                {isExporting ? <Loader2 className="animate-spin" /> : <Download size={20} />}
+                <span>ส่งออก Excel</span>
             </button>
         </div>
       </header>
 
-      {/* Filter Bar */}
-      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 grid grid-cols-1 md:grid-cols-5 gap-4">
-        {/* Search */}
-        <div className="relative md:col-span-1">
-           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-           <input 
-             type="text" 
-             placeholder="ค้นหา..." 
-             value={search}
-             onChange={(e) => setSearch(e.target.value)}
-             className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white transition-all placeholder-gray-400"
-           />
+      {/* Financial Summary Dashboard */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border-l-4 border-green-500 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-xs font-bold text-gray-400 uppercase">ผ่าน (Pass)</span>
+                <CheckCircle2 className="text-green-500" size={20} />
+            </div>
+            <div className="text-2xl font-bold text-gray-800 dark:text-white">{summaryStats.passCount} <span className="text-sm font-normal text-gray-400">รายการ</span></div>
+            <div className="mt-2 text-xs text-green-600 flex justify-between">
+                <span>ยอดขาย: ฿{summaryStats.passValue.toLocaleString()}</span>
+                <span className="text-gray-400">ทุน: ฿{summaryStats.passCost.toLocaleString()}</span>
+            </div>
+        </div>
+        
+        <div className="bg-white dark:bg-gray-800 p-5 rounded-2xl border-l-4 border-red-500 shadow-sm">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-xs font-bold text-gray-400 uppercase">ชำรุด (Damage)</span>
+                <AlertTriangle className="text-red-500" size={20} />
+            </div>
+            <div className="text-2xl font-bold text-gray-800 dark:text-white">{summaryStats.damageCount} <span className="text-sm font-normal text-gray-400">รายการ</span></div>
+            <div className="mt-2 text-xs text-red-600 flex justify-between">
+                <span>สูญเสียยอดขาย: ฿{summaryStats.damageValue.toLocaleString()}</span>
+                <span className="text-gray-400">จมทุน: ฿{summaryStats.damageCost.toLocaleString()}</span>
+            </div>
         </div>
 
-        {/* Status Filter */}
-        <div className="relative">
-          <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-          <select 
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
-          >
-            <option value="All">สถานะทั้งหมด</option>
-            <option value={QCStatus.PASS}>ผ่าน (Pass)</option>
-            <option value={QCStatus.DAMAGE}>ชำรุด (Damage)</option>
-          </select>
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-            <ChevronDown size={14} className="text-gray-500" />
-          </div>
+        <div className="bg-gradient-to-br from-blue-600 to-indigo-700 p-5 rounded-2xl text-white shadow-xl shadow-blue-500/20">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-xs font-bold text-blue-100 uppercase">รวมราคาขายที่ได้</span>
+                <TrendingUp size={20} />
+            </div>
+            <div className="text-2xl font-bold">฿{summaryStats.passValue.toLocaleString()}</div>
+            <p className="text-[10px] text-blue-200 mt-1">Net Recovery Value</p>
         </div>
 
-        {/* Comment Filter */}
-        <div className="relative">
-          <MessageSquare className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-          <select 
-            value={commentFilter}
-            onChange={(e) => setCommentFilter(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
-          >
-            <option value="All">Comment ทั้งหมด</option>
-            {comments.map(c => (
-                <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-            <ChevronDown size={14} className="text-gray-500" />
-          </div>
-        </div>
-
-        {/* Inspector Filter */}
-        <div className="relative">
-          <User className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-          <select 
-            value={inspectorFilter}
-            onChange={(e) => setInspectorFilter(e.target.value)}
-            className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white appearance-none cursor-pointer transition-all text-gray-700 truncate"
-          >
-            <option value="All">ผู้ตรวจสอบทั้งหมด</option>
-            {inspectors.map(name => (
-                <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-          <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-            <ChevronDown size={14} className="text-gray-500" />
-          </div>
-        </div>
-
-        {/* Date Filter */}
-        <div className="relative">
-           <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-           <input 
-             type="date"
-             value={dateFilter}
-             onChange={(e) => setDateFilter(e.target.value)}
-             className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-700 rounded-xl border-none focus:ring-2 focus:ring-pastel-blue dark:text-white transition-all text-gray-700"
-           />
+        <div className="bg-gradient-to-br from-purple-600 to-pink-700 p-5 rounded-2xl text-white shadow-xl shadow-purple-500/20">
+            <div className="flex justify-between items-start mb-2">
+                <span className="text-xs font-bold text-purple-100 uppercase">รวมต้นทุนทั้งหมด</span>
+                <DollarSign size={20} />
+            </div>
+            <div className="text-2xl font-bold">฿{(summaryStats.passCost + summaryStats.damageCost).toLocaleString()}</div>
+            <p className="text-[10px] text-purple-200 mt-1">Total Inventory Cost</p>
         </div>
       </div>
 
-      {/* List Container */}
-      <div className="animate-slide-up">
-        {isLoading && logs.length === 0 ? (
-            <div className="flex justify-center p-12"><Loader2 className="animate-spin text-pastel-blueDark" size={32} /></div>
-        ) : (
-        <>
-        {/* Desktop Table */}
-        <div className="hidden md:block bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+      {/* Filter Bar */}
+      <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-sm flex flex-wrap gap-4 items-center border border-gray-100 dark:border-gray-700">
+        <div className="flex-1 min-w-[200px] relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
+            <input type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า..." value={search} onChange={e => setSearch(e.target.value)} className="w-full pl-10 pr-4 py-2.5 bg-gray-50 dark:bg-gray-700 rounded-xl outline-none focus:ring-2 focus:ring-blue-500" />
+        </div>
+        <select value={statusFilter} onChange={e => setStatusFilter(e.target.value as any)} className="bg-gray-50 dark:bg-gray-700 px-4 py-2.5 rounded-xl outline-none text-sm">
+            <option value="All">สถานะทั้งหมด</option>
+            <option value={QCStatus.PASS}>ผ่าน</option>
+            <option value={QCStatus.DAMAGE}>ชำรุด</option>
+        </select>
+        <input type="date" value={dateFilter} onChange={e => setDateFilter(e.target.value)} className="bg-gray-50 dark:bg-gray-700 px-4 py-2.5 rounded-xl outline-none text-sm" />
+      </div>
+
+      {/* Data Table */}
+      <div className="bg-white dark:bg-gray-800 rounded-3xl shadow-sm overflow-hidden border border-gray-100 dark:border-gray-700">
           <div className="overflow-x-auto">
-            <table className="w-full text-left whitespace-nowrap">
-              <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 text-xs uppercase font-bold tracking-wider">
-                <tr>
-                  <th className="p-4 pl-6">Lot no.</th>
-                  <th className="p-4">Type</th>
-                  <th className="p-4">RMS Return Item ID</th>
-                  <th className="p-4">Product Name</th>
-                  <th className="p-4">Product unit price</th>
-                  <th className="p-4">ต้นทุน</th>
-                  <th className="p-4">ราคาขาย</th>
-                  <th className="p-4">Comment</th>
-                  <th className="p-4">Remark</th>
-                  <th className="p-4">Inspector</th>
-                  <th className="p-4">Timestamp</th>
-                  <th className="p-4 text-center">Images</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                {filteredLogs.map(log => (
-                  <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30 transition-colors">
-                    <td className="p-4 pl-6 text-sm text-gray-600 dark:text-gray-300">{log.lotNo || '-'}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">{log.productType || '-'}</td>
-                    <td className="p-4 text-sm font-mono text-gray-600 dark:text-gray-300">{log.rmsId || '-'}</td>
-                    <td className="p-4">
-                      <p className="font-medium text-gray-800 dark:text-white">{log.productName}</p>
-                    </td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">฿{(log.unitPrice || 0).toLocaleString()}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">฿{(log.costPrice || 0).toFixed(2)}</td>
-                    <td className="p-4 text-sm font-bold text-gray-800 dark:text-white">฿{(log.sellingPrice || 0).toFixed(2)}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300 max-w-xs truncate">{log.reason || '-'}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300 max-w-xs truncate">{log.remark || '-'}</td>
-                    <td className="p-4 text-sm text-gray-600 dark:text-gray-300">{log.inspectorId}</td>
-                    <td className="p-4 text-sm text-gray-500 dark:text-gray-400 text-xs">
-                        {new Date(log.timestamp).toLocaleString('th-TH', { 
-                            dateStyle: 'short', 
-                            timeStyle: 'short' 
-                        })}
-                    </td>
-                    <td className="p-4 text-center">
-                        {log.imageUrls.length > 0 ? (
-                            <span className="inline-flex items-center gap-1 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-300 px-2 py-1 rounded text-xs font-bold">
-                                <ImageIcon size={12} /> {log.imageUrls.length}
-                            </span>
-                        ) : (
-                            <span className="text-gray-300">-</span>
-                        )}
-                    </td>
-                  </tr>
-                ))}
-                {filteredLogs.length === 0 && (
-                  <tr>
-                    <td colSpan={12} className="p-12 text-center text-gray-400">
-                      <div className="flex flex-col items-center">
-                          <ClipboardList size={32} className="mb-2 opacity-20" />
-                          <p>{logs.length === 0 ? 'ยังไม่มีรายการตรวจสอบ' : 'ไม่พบข้อมูลตามเงื่อนไขที่กำหนด'}</p>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
+              <table className="w-full text-left text-sm">
+                  <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-400 uppercase font-bold text-[10px] tracking-wider">
+                      <tr>
+                          <th className="p-4 pl-6">RMS ID</th>
+                          <th className="p-4">ชื่อสินค้า</th>
+                          <th className="p-4">สถานะ</th>
+                          <th className="p-4">ต้นทุน</th>
+                          <th className="p-4">ราคาขาย</th>
+                          <th className="p-4">Comment</th>
+                          <th className="p-4 pr-6">ผู้ตรวจ</th>
+                      </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {filteredLogs.map(log => (
+                          <tr key={log.id} className="hover:bg-gray-50 dark:hover:bg-gray-700/30">
+                              <td className="p-4 pl-6 font-mono text-gray-500">{log.barcode}</td>
+                              <td className="p-4 font-bold text-gray-800 dark:text-white">{log.productName}</td>
+                              <td className="p-4">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold ${log.status === QCStatus.PASS ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+                                      {log.status.toUpperCase()}
+                                  </span>
+                              </td>
+                              <td className="p-4 text-gray-500">฿{log.costPrice.toLocaleString()}</td>
+                              <td className="p-4 font-bold text-gray-800 dark:text-white">฿{log.sellingPrice.toLocaleString()}</td>
+                              <td className="p-4 text-gray-400 italic text-xs max-w-xs truncate">{log.reason || '-'}</td>
+                              <td className="p-4 pr-6 text-gray-500">{log.inspectorId}</td>
+                          </tr>
+                      ))}
+                  </tbody>
+              </table>
           </div>
-        </div>
-
-        {/* Mobile Card List View */}
-        <div className="md:hidden space-y-4">
-           {filteredLogs.map(log => (
-              <div 
-                key={log.id} 
-                className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden flex"
-              >
-                 {/* Status Strip Indicator */}
-                 <div className={`w-2 flex-shrink-0 ${log.status === QCStatus.PASS ? 'bg-green-500' : 'bg-red-500'}`} />
-                 
-                 <div className="flex-1 p-4">
-                    {/* Header: RMS & Status */}
-                    <div className="flex justify-between items-start mb-3">
-                       <div>
-                          <p className="text-[10px] uppercase font-bold text-gray-400 tracking-wide mb-0.5">
-                              RMS: {log.rmsId || 'N/A'} • Lot: {log.lotNo || 'N/A'}
-                          </p>
-                          <h3 className="font-bold text-gray-800 dark:text-white text-lg leading-tight">{log.productName}</h3>
-                       </div>
-                       <div className={`
-                          flex items-center justify-center w-8 h-8 rounded-full shadow-sm
-                          ${log.status === QCStatus.PASS ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}
-                       `}>
-                          {log.status === QCStatus.PASS ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-                       </div>
-                    </div>
-
-                    {/* Meta Info Badge */}
-                    <div className="flex flex-wrap items-center gap-2 mb-4">
-                        <span className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700/50 px-2 py-1 rounded-md text-xs font-mono text-gray-500 dark:text-gray-400">
-                            <Tag size={12} /> {log.barcode}
-                        </span>
-                        {log.productType && (
-                             <span className="flex items-center gap-1 bg-gray-100 dark:bg-gray-700/50 px-2 py-1 rounded-md text-xs text-gray-500 dark:text-gray-400">
-                                Type: {log.productType}
-                             </span>
-                        )}
-                        <span className="flex items-center gap-1 bg-purple-50 dark:bg-purple-900/20 px-2 py-1 rounded-md text-xs text-purple-600 dark:text-purple-300">
-                            <User size={12} /> {log.inspectorId}
-                        </span>
-                    </div>
-
-                    {/* Price and Reason Section */}
-                    <div className="flex justify-between items-end pt-3 border-t border-gray-50 dark:border-gray-700/50 border-dashed">
-                        <div>
-                           <p className="text-xs text-gray-400 mb-0.5">ราคาขาย</p>
-                           <p className="text-xl font-bold text-gray-800 dark:text-white">฿{(log.sellingPrice || 0).toLocaleString()}</p>
-                        </div>
-                        <div className="flex-1 ml-6 text-right">
-                           {log.reason && <p className="text-xs text-gray-600 dark:text-gray-300 italic truncate max-w-[150px] ml-auto">"{log.reason}"</p>}
-                           {log.remark && <p className="text-xs text-gray-400 truncate max-w-[150px] ml-auto">Remark: {log.remark}</p>}
-                           <p className="text-[10px] text-gray-300 mt-1">
-                               {new Date(log.timestamp).toLocaleTimeString('th-TH')}
-                           </p>
-                        </div>
-                    </div>
-                 </div>
+          {filteredLogs.length === 0 && (
+              <div className="p-20 text-center flex flex-col items-center gap-4 text-gray-300">
+                  <ClipboardList size={64} className="opacity-10" />
+                  <p>ไม่พบข้อมูลตามเงื่อนไข</p>
               </div>
-           ))}
-           
-           {filteredLogs.length === 0 && (
-             <div className="p-12 text-center text-gray-400 bg-white dark:bg-gray-800 rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700">
-                 <div className="bg-gray-50 dark:bg-gray-700 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <ClipboardList size={24} className="opacity-50" />
-                 </div>
-                 <h3 className="font-bold text-gray-600 dark:text-gray-300">
-                     {logs.length === 0 ? 'ยังไม่มีรายการตรวจสอบ' : 'ไม่พบข้อมูล'}
-                 </h3>
-                 <p className="text-sm mt-1">
-                     {logs.length === 0 ? 'เริ่มสแกนสินค้าเพื่อบันทึกข้อมูล' : 'ลองเปลี่ยนเงื่อนไขการค้นหา หรือกดปุ่มรีเฟรช'}
-                 </p>
-             </div>
-           )}
-        </div>
-        </>
-        )}
+          )}
       </div>
     </div>
   );

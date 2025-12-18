@@ -12,13 +12,19 @@ export interface ProductMaster {
   unitPrice?: number; // Maps to Product unit price
   image?: string; 
   stock?: number;
-  lotNo?: string; // New: Maps to Lot no.
-  productType?: string; // New: Maps to Type
+  lotNo?: string; 
+  productType?: string; 
 }
 
 export enum QCStatus {
   PASS = 'Pass',
   DAMAGE = 'Damage',
+}
+
+export enum DataSourceType {
+  GOOGLE_SHEETS = 'google_sheets',
+  MYSQL_BRIDGE = 'mysql_bridge',
+  SUPABASE = 'supabase'
 }
 
 export interface QCRecord {
@@ -30,13 +36,10 @@ export interface QCRecord {
   status: QCStatus;
   reason: string; 
   remark?: string; 
-  
-  // Fields
   lotNo?: string;
   productType?: string;
   rmsId?: string;
   unitPrice?: number;
-
   imageUrls: string[]; 
   timestamp: string; 
   inspectorId: string;
@@ -47,22 +50,4 @@ export interface StatSummary {
   passCount: number;
   damageCount: number;
   totalValue: number;
-}
-
-export interface FilterOptions {
-  startDate: string;
-  endDate: string;
-  status: QCStatus | 'All';
-  search: string;
-}
-
-export interface ProductEditLog {
-  id: string;
-  barcode: string;
-  productName: string;
-  field: string;
-  oldValue: string | number;
-  newValue: string | number;
-  editedBy: string;
-  timestamp: string;
 }

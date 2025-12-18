@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { fetchMasterData, importMasterData, deleteProduct, saveProduct, saveEditLogs, exportEditLogs, getEditLogs, clearEditLogs, getApiUrl, bulkSaveProducts, clearLocalMasterData, exportMasterData } from '../services/db';
-import { ProductMaster, ProductEditLog } from '../types';
-import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings, Clock, FileDown, History, CloudUpload, Archive } from 'lucide-react';
+import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearLocalMasterData, clearRemoteMasterData, exportMasterData, updateLocalMasterDataCache, getApiUrl } from '../services/db';
+import { ProductMaster } from '../types';
+import { Upload, Trash2, Search, Plus, Edit2, X, Loader2, Database, Package, Sparkles, Box, Camera, ImageIcon, AlertTriangle, Link, RefreshCw, AlertCircle, Settings, Clock, FileDown, History, CloudUpload, Archive, FileSpreadsheet, Check } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
@@ -15,27 +15,28 @@ export const MasterData: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [hasApiUrl, setHasApiUrl] = useState(true);
-  
+  const [isClearing, setIsClearing] = useState(false);
+
   // Modal State
   const [showModal, setShowModal] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<ProductMaster>>({});
-  const [originalProduct, setOriginalProduct] = useState<ProductMaster | null>(null);
 
   // Delete Confirm State
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
-    loadLocalData();
+    loadSessionData();
   }, []);
 
-  const loadLocalData = async () => {
+  const loadSessionData = async () => {
     if (!getApiUrl()) setHasApiUrl(false);
     
-    // Always load from cache (localstorage) first. 
-    // We removed the auto-fetch from API logic here.
+    setIsLoading(true);
     try {
-        const cached = await fetchMasterData(false); // false = do not force network
+        // Only load what is in the local IndexedDB. 
+        // We do NOT fetch from Google Sheets to avoid overwriting the "Import First" flow.
+        const cached = await fetchMasterData(false); 
         setProducts(cached);
     } catch (e) {
         console.warn("Local load failed", e);
@@ -49,18 +50,28 @@ export const MasterData: React.FC = () => {
       setIsImporting(true);
       
       try {
-        // Fast Import: Reads Excel and updates LocalStorage directly. No API calls per row.
+        // Fast Import: Reads Excel and updates IndexedDB directly. No API calls per row.
         const newProducts = await importMasterData(e.target.files[0]);
-        setProducts(newProducts);
         
-        setIsImporting(false);
-        alert(`✨ นำเข้าข้อมูลสำเร็จ ${newProducts.length} รายการ!\n(ข้อมูลอยู่ในเครื่องแล้ว กด "บันทึกขึ้น Cloud" หากต้องการอัปเดต Google Sheet)`);
+        // Basic Validation check on the first few rows
+        if (newProducts.length === 0) {
+            alert("⚠️ ไฟล์ไม่ถูกต้อง: ไม่พบข้อมูลสินค้า");
+            setProducts([]);
+        } else {
+             // Check required columns logic based on parsed result
+             const sample = newProducts[0];
+             if (!sample.barcode || !sample.productName) {
+                 alert("⚠️ โครงสร้างไฟล์ไม่ถูกต้อง: ต้องมีคอลัมน์ 'RMS Return Item ID' และ 'Product Name'");
+             } else {
+                 setProducts(newProducts);
+                 alert(`✅ นำเข้าข้อมูลสำเร็จ ${newProducts.length} รายการ!\n\nขั้นตอนต่อไป: ตรวจสอบข้อมูลและกด "บันทึกขึ้น Cloud"`);
+             }
+        }
       } catch (err) {
-        setIsImporting(false);
-        alert('เกิดข้อผิดพลาดในการนำเข้า');
+        alert('เกิดข้อผิดพลาดในการนำเข้าไฟล์: กรุณาตรวจสอบรูปแบบไฟล์ Excel');
         console.error(err);
       } finally {
-          // Reset input
+          setIsImporting(false);
           e.target.value = '';
       }
     }
@@ -71,28 +82,44 @@ export const MasterData: React.FC = () => {
           alert('ไม่มีข้อมูลให้บันทึก');
           return;
       }
-      if (!confirm(`ยืนยันการบันทึกสินค้า ${products.length} รายการไปยัง Google Sheet?\n\n(ข้อมูลเก่าใน Sheet "Scrap Crossborder" จะถูกแทนที่ทั้งหมด)`)) return;
+      if (!confirm(`ยืนยันการบันทึกสินค้า ${products.length} รายการไปยัง Google Sheet?\n\n(ข้อมูลเก่าใน Sheet "Scrap Crossborder" จะถูกล้างและแทนที่ด้วยข้อมูลชุดนี้)`)) return;
 
       setIsSyncing(true);
       try {
           await bulkSaveProducts(products);
           alert('✅ บันทึกข้อมูลไปยัง Google Sheet เรียบร้อยแล้ว');
       } catch (e: any) {
-          alert(`เกิดข้อผิดพลาด: ${e.message}`);
+          alert(`เกิดข้อผิดพลาดในการบันทึก: ${e.message}`);
       } finally {
           setIsSyncing(false);
       }
   };
 
-  const handleClearAll = () => {
-      if (confirm('คุณต้องการ "ลบสินค้าทั้งหมด" ในเครื่องหรือไม่?')) {
-          clearLocalMasterData();
-          setProducts([]);
+  const handleClearAll = async () => {
+      const confirmed = confirm('⚠️ คำเตือน: คุณต้องการลบข้อมูลสินค้าทั้งหมดใช่หรือไม่?\n\n1. ข้อมูลในหน้าเว็บจะหายไป\n2. ข้อมูลใน Google Sheets จะถูกลบทั้งหมด\n\nการกระทำนี้ไม่สามารถกู้คืนได้');
+      if (confirmed) {
+          setIsClearing(true);
+          try {
+             // 1. Clear Local
+             await clearLocalMasterData();
+             setProducts([]);
+             
+             // 2. Clear Remote
+             await clearRemoteMasterData();
+             
+             alert('ล้างข้อมูลเรียบร้อยแล้ว');
+          } catch (e: any) {
+             alert(`เกิดข้อผิดพลาดในการล้างข้อมูลบน Cloud: ${e.message}`);
+             // Still clear local to be responsive
+             setProducts([]);
+          } finally {
+             setIsClearing(false);
+          }
       }
   };
 
-  const handleExportExcel = () => {
-      const success = exportMasterData();
+  const handleExportExcel = async () => {
+      const success = await exportMasterData();
       if (!success) alert('ไม่มีข้อมูลให้ส่งออก');
   };
 
@@ -104,16 +131,14 @@ export const MasterData: React.FC = () => {
 
   const confirmDelete = async () => {
     if (deleteId) {
-        // Since we are now "Offline First", we primarily update local state.
-        // If user wants to delete from cloud, they should Sync afterwards, OR we keep deleteProduct API call if desired.
-        // For consistency with the new bulk flow, let's update local and ask to sync, OR just delete locally.
-        // However, existing service deleteProduct calls API. Let's keep it mixed for single item edits.
-        
-        await deleteProduct(deleteId); // Delete from API
-        
-        // Update Local State
+        // Offline First logic: Delete local first
         const updated = products.filter(p => p.barcode !== deleteId);
         setProducts(updated);
+        await updateLocalMasterDataCache(updated);
+        
+        // Try deleting from cloud if possible, but don't block UI
+        deleteProduct(deleteId).catch(e => console.warn("Cloud delete failed", e));
+        
         setDeleteId(null);
     }
   };
@@ -121,14 +146,12 @@ export const MasterData: React.FC = () => {
   const handleEdit = (product: ProductMaster) => {
     setIsEditMode(true);
     setEditingProduct({ ...product }); 
-    setOriginalProduct({ ...product }); 
     setShowModal(true);
   };
 
   const handleCreate = () => {
     setIsEditMode(false);
     setEditingProduct({});
-    setOriginalProduct(null);
     setShowModal(true);
   };
 
@@ -139,20 +162,9 @@ export const MasterData: React.FC = () => {
         return;
     }
     
-    // Save to API (Single item)
-    await saveProduct({
-        barcode: editingProduct.barcode,
-        productName: editingProduct.productName,
-        costPrice: Number(editingProduct.costPrice) || 0,
-        unitPrice: Number(editingProduct.unitPrice) || 0,
-        stock: Number(editingProduct.stock) || 0,
-        image: editingProduct.image,
-        lotNo: editingProduct.lotNo,
-        productType: editingProduct.productType
-    });
-
-    // Update Local State manually to reflect changes immediately
     const newItem = editingProduct as ProductMaster;
+    
+    // Logic: Update local list -> Update Cache -> Try Cloud
     let newProducts = [...products];
     const index = newProducts.findIndex(p => p.barcode === newItem.barcode);
     if (index >= 0) {
@@ -162,8 +174,14 @@ export const MasterData: React.FC = () => {
     }
     setProducts(newProducts);
     
-    // Update Cache
-    localStorage.setItem('qc_cache_master', JSON.stringify(newProducts));
+    // Async operations
+    try {
+        await updateLocalMasterDataCache(newProducts);
+        // Try save to cloud
+        saveProduct(newItem).catch(console.warn);
+    } catch(e) {
+        console.error("Save error", e);
+    }
     
     setShowModal(false);
   };
@@ -197,65 +215,78 @@ export const MasterData: React.FC = () => {
     <div className="space-y-6 pb-24 md:pb-0 animate-fade-in relative min-h-screen">
       
       {/* Header Section */}
-      <div className="flex flex-col gap-4 bg-gradient-to-r from-pastel-blue to-white dark:from-gray-800 dark:to-gray-900 p-6 -mx-4 md:-mx-8 md:rounded-b-3xl shadow-sm border-b border-gray-100 dark:border-gray-700">
-        <div className="flex justify-between items-start">
+      <div className="bg-white dark:bg-gray-800 p-6 -mx-4 md:mx-0 md:rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col gap-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
-            <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-2">
-                <Box className="text-pastel-blueDark" />
-                คลังสินค้า (Scrap Crossborder)
-            </h1>
-            <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
-                จัดการรายการสินค้าทั้งหมด {products.length} รายการ (Local)
-            </p>
+                <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-2">
+                    <Box className="text-pastel-blueDark" />
+                    คลังสินค้า (Scrap Crossborder)
+                </h1>
+                <p className="text-gray-500 dark:text-gray-400 text-sm mt-1">
+                    จัดการข้อมูลด้วยไฟล์ Excel (Import -> Validate -> Save to Cloud)
+                </p>
             </div>
-            
-            <button 
+             <button 
                 onClick={handleCreate}
-                className="flex items-center justify-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white p-3 rounded-2xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all"
+                className="self-end md:self-auto flex items-center justify-center gap-2 bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 px-4 py-2 rounded-xl text-sm font-bold transition-all"
             >
-                <Plus size={24} />
+                <Plus size={16} /> เพิ่มรายการเดียว
             </button>
         </div>
 
-        {/* Action Bar */}
-        <div className="flex gap-2 overflow-x-auto no-scrollbar py-2">
+        {/* Workflow Action Bar */}
+        <div className="flex flex-wrap items-center gap-3 p-4 bg-gray-50 dark:bg-gray-700/30 rounded-2xl border border-gray-100 dark:border-gray-700">
             
-            {/* Import Button */}
-            <label className={`flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-pastel-green/50 text-green-700 dark:text-green-300 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all shadow-sm active:scale-95 hover:bg-green-50 dark:hover:bg-green-900/20 ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}`}>
-                {isImporting ? <Loader2 size={16} className="animate-spin"/> : <Upload size={16} />}
-                <span>นำเข้า Excel</span>
-                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
-            </label>
+            {/* Step 1: Import */}
+            <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-pastel-blueDark text-white text-xs font-bold">1</span>
+                <label className={`
+                    flex items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-pastel-green text-green-700 dark:text-green-400 px-4 py-2.5 rounded-xl text-sm font-bold cursor-pointer transition-all shadow-sm active:scale-95 hover:bg-green-50 dark:hover:bg-green-900/20
+                    ${isImporting ? 'opacity-75 cursor-not-allowed' : ''}
+                `}>
+                    {isImporting ? <Loader2 size={18} className="animate-spin"/> : <FileSpreadsheet size={18} />}
+                    <span>อัปโหลด Excel</span>
+                    <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
+                </label>
+            </div>
 
-            {/* Sync Cloud Button */}
-             <button 
-                onClick={handleSyncToCloud}
-                disabled={isSyncing || products.length === 0}
-                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-blue-200 dark:border-blue-800 text-blue-600 dark:text-blue-400 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-blue-50 dark:hover:bg-blue-900/20 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-                {isSyncing ? <Loader2 size={16} className="animate-spin" /> : <CloudUpload size={16} />}
-                <span>บันทึกขึ้น Cloud</span>
-            </button>
+            <div className="h-8 w-px bg-gray-300 dark:bg-gray-600 hidden md:block" />
 
-            {/* Export Button */}
-            <button 
-                onClick={handleExportExcel}
-                disabled={products.length === 0}
-                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50"
-            >
-                <FileDown size={16} />
-                <span>Export</span>
-            </button>
+            {/* Step 2: Save to Cloud */}
+            <div className="flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-gray-400 text-white text-xs font-bold">2</span>
+                 <button 
+                    onClick={handleSyncToCloud}
+                    disabled={isSyncing || products.length === 0}
+                    className="flex items-center justify-center gap-2 bg-pastel-blueDark text-white px-4 py-2.5 rounded-xl text-sm font-bold transition-all shadow-md shadow-blue-500/20 active:scale-95 hover:bg-sky-800 disabled:opacity-50 disabled:cursor-not-allowed disabled:shadow-none"
+                >
+                    {isSyncing ? <Loader2 size={18} className="animate-spin" /> : <CloudUpload size={18} />}
+                    <span>บันทึกขึ้น Cloud</span>
+                </button>
+            </div>
 
-            {/* Clear Button */}
-            <button 
-                onClick={handleClearAll}
-                disabled={products.length === 0}
-                className="flex-shrink-0 flex items-center justify-center gap-2 bg-white dark:bg-gray-700 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-4 py-2 rounded-xl text-sm font-medium transition-all shadow-sm active:scale-95 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
-            >
-                <Archive size={16} />
-                <span>เคลียร์รายการ</span>
-            </button>
+            <div className="flex-1" />
+
+            {/* Utility Buttons */}
+            <div className="flex gap-2">
+                 <button 
+                    onClick={handleExportExcel}
+                    disabled={products.length === 0}
+                    className="flex items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-300 px-3 py-2.5 rounded-xl text-xs font-bold transition-all hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+                    title="Export to Excel"
+                >
+                    <FileDown size={16} /> Export
+                </button>
+                <button 
+                    onClick={handleClearAll}
+                    disabled={products.length === 0 || isClearing}
+                    className="flex items-center justify-center gap-2 bg-white dark:bg-gray-800 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 px-3 py-2.5 rounded-xl text-xs font-bold transition-all hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+                    title="Clear All Data"
+                >
+                    {isClearing ? <Loader2 size={16} className="animate-spin"/> : <Trash2 size={16} />} 
+                    Clear All
+                </button>
+            </div>
         </div>
 
         {/* Search */}
@@ -263,10 +294,10 @@ export const MasterData: React.FC = () => {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
             <input 
                 type="text" 
-                placeholder="ค้นหา ชื่อสินค้า, RMS ID, Lot หรือ Type..." 
+                placeholder="ค้นหาในรายการที่อัปโหลด..." 
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-gray-200 dark:border-gray-700 rounded-2xl focus:ring-2 focus:ring-pastel-blue focus:outline-none dark:text-white shadow-sm"
+                className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-pastel-blue focus:outline-none dark:text-white shadow-inner"
             />
         </div>
       </div>
@@ -281,23 +312,25 @@ export const MasterData: React.FC = () => {
         // Empty State
         <div className="flex flex-col items-center justify-center py-12 px-4 text-center animate-slide-up">
             <div className="bg-white dark:bg-gray-800 p-8 rounded-full shadow-lg mb-6 animate-bounce-soft">
-                <Database size={64} className="text-pastel-blueDark opacity-50" />
+                <FileSpreadsheet size={64} className="text-pastel-greenDark opacity-50" />
             </div>
-            <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ไม่พบสินค้า</h3>
-            <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-xs mx-auto">
-                {products.length === 0 ? 'กรุณานำเข้าไฟล์ Excel สินค้าเพื่อเริ่มใช้งาน' : 'ไม่พบข้อมูลที่ค้นหา'}
+            <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">ยังไม่มีข้อมูลสินค้า</h3>
+            <p className="text-gray-500 dark:text-gray-400 mb-8 max-w-sm mx-auto">
+                เริ่มต้นใช้งานโดยการอัปโหลดไฟล์ Excel เพื่อเตรียมข้อมูลเข้าสู่ระบบ
             </p>
-             {products.length === 0 && (
-                <label className="flex items-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all active:scale-95 cursor-pointer">
-                    <Upload size={20} />
-                    <span>นำเข้าไฟล์ Excel</span>
-                    <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
-                </label>
-             )}
+             <label className="flex items-center gap-2 bg-pastel-blueDark hover:bg-sky-800 text-white px-6 py-3 rounded-xl font-bold shadow-lg shadow-blue-500/30 transition-all active:scale-95 cursor-pointer">
+                <Upload size={20} />
+                <span>เลือกไฟล์ Excel</span>
+                <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} disabled={isImporting} />
+            </label>
         </div>
       ) : (
         // Desktop Table View
         <div className="hidden md:block bg-white dark:bg-gray-800 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
+             <div className="p-3 bg-blue-50 dark:bg-blue-900/10 border-b border-blue-100 dark:border-blue-800/30 flex justify-between items-center px-6">
+                <span className="text-xs font-bold text-blue-600 dark:text-blue-400">Preview Data ({filtered.length} items)</span>
+                <span className="text-[10px] text-gray-400">Local Session Data</span>
+             </div>
             <table className="w-full text-left">
                 <thead className="bg-gray-50 dark:bg-gray-700/50 text-gray-500 dark:text-gray-400 text-sm">
                     <tr>
