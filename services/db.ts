@@ -85,7 +85,7 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     return responseText ? JSON.parse(responseText) : true;
 };
 
-// ดึงตัวเลขสรุปจาก Cloud (Dynamic stats)
+// ดึงตัวเลขสรุปจาก Cloud (Dynamic stats) โดยนับจากตาราง products (Inventory)
 export const fetchCloudStats = async () => {
     const [totalProducts, totalLogs] = await Promise.all([
         callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
@@ -96,8 +96,34 @@ export const fetchCloudStats = async () => {
     return { 
         remaining,
         checked,
-        total: remaining + checked
+        total: remaining // จำนวนรวมนับจากตารางสินค้าที่ยังไม่ได้ตรวจ (Inventory/Production table)
     };
+};
+
+// ดึงข้อมูลสินค้าแบบ Batch จำกัดที่ 500 รายการ เพื่อประสิทธิภาพ
+export const fetchMasterDataBatch = async (forceUpdate = false): Promise<ProductMaster[]> => {
+    const cached = await dbGet(KEYS.CACHE_MASTER);
+    if (cached && !forceUpdate && cached.length > 0) return cached.slice(0, 500);
+    
+    try {
+        const limit = 500;
+        const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}`);
+        if (Array.isArray(data)) {
+            const mapped = data.map(item => ({
+                barcode: String(item.barcode).trim(),
+                productName: item.product_name || 'No Name',
+                costPrice: Number(item.cost_price || 0),
+                unitPrice: Number(item.unit_price || 0),
+                lotNo: item.lot_no || '',
+                productType: item.product_type || ''
+            }));
+            await dbSet(KEYS.CACHE_MASTER, mapped);
+            return mapped;
+        }
+    } catch (e) {
+        console.error("FetchBatch failed:", e);
+    }
+    return cached ? cached.slice(0, 500) : [];
 };
 
 export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
@@ -108,7 +134,7 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
         const totalCount = await callSupabase('products', 'GET', null, '?select=barcode&limit=1', true) as number;
         let allData: any[] = [];
         let offset = 0;
-        const limit = 500; // Batch size: 500 items per round
+        const limit = 500;
 
         if (onProgress) onProgress(0, totalCount);
 
@@ -118,7 +144,7 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
                 allData = [...allData, ...data];
                 offset += data.length;
                 if (onProgress) onProgress(offset, totalCount);
-                if (data.length < limit) break; // End of records
+                if (data.length < limit) break;
             } else {
                 break;
             }
@@ -220,7 +246,7 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     if (!products.length) return;
-    const CHUNK_SIZE = 500; // Efficient chunking for Supabase
+    const CHUNK_SIZE = 500;
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
         const chunk = products.slice(i, i + CHUNK_SIZE);
         const payloads = chunk.map(p => ({

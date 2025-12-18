@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchMasterData, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache, fetchCloudStats } from '../services/db';
+import { fetchMasterDataBatch, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache, fetchCloudStats } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Box, ClipboardCheck, Timer, RefreshCw, Server, Database } from 'lucide-react';
@@ -28,7 +28,6 @@ export const QCScreen: React.FC = () => {
   const [cachedProducts, setCachedProducts] = useState<ProductMaster[]>([]);
   const [cloudStats, setCloudStats] = useState({ remaining: 0, checked: 0, total: 0 });
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
 
   const [isSaving, setIsSaving] = useState(false);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
@@ -53,9 +52,8 @@ export const QCScreen: React.FC = () => {
         const stats = await fetchCloudStats();
         setCloudStats(stats);
         
-        const data = await fetchMasterData(force, (current, total) => {
-            setSyncProgress({ current, total });
-        });
+        // ดึงข้อมูลสินค้าเพียง 500 รายการสำหรับระบบตรวจเช็ค เพื่อลดความช้า
+        const data = await fetchMasterDataBatch(force);
         setCachedProducts(data);
     } catch (e) {
         console.error(e);
@@ -137,7 +135,7 @@ export const QCScreen: React.FC = () => {
       setStep('form');
       setErrors({});
     } else {
-      setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในระบบ` });
+      setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคิว 500 รายการนี้` });
     }
   };
 
@@ -168,6 +166,11 @@ export const QCScreen: React.FC = () => {
         setStep('scan');
         setBarcode('');
         setProduct(null);
+        
+        // ถ้าคิวใกล้หมด ให้โหลด Batch ใหม่มาเติมอัตโนมัติ
+        if (updatedList.length < 5) {
+            initData(true);
+        }
     } catch (e: any) { 
         alert(`ผิดพลาด: ${e.message}`); 
     } finally { setIsSaving(false); }
@@ -176,20 +179,14 @@ export const QCScreen: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto pb-24 px-4 animate-fade-in space-y-8">
       
-      {/* Dynamic Batch Loading Overlay */}
+      {/* Batch Loading Overlay */}
       {isSyncing && (
           <div className="fixed inset-0 z-[300] bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center animate-fade-in">
               <div className="bg-white dark:bg-gray-800 p-12 rounded-[4rem] shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-8 max-w-sm w-full animate-slide-up">
                   <div className="w-24 h-24 rounded-full border-4 border-gray-100 dark:border-gray-700 border-t-pastel-blueDark animate-spin" />
                   <div className="space-y-2">
-                      <h3 className="text-2xl font-black text-gray-800 dark:text-white uppercase">Syncing Cloud</h3>
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Batch Load: 500/Round</p>
-                  </div>
-                  <div className="w-full space-y-2">
-                      <div className="h-3 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                          <div className="h-full bg-pastel-blueDark transition-all duration-500" style={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }} />
-                      </div>
-                      <p className="text-[10px] font-black text-pastel-blueDark uppercase">{syncProgress.current.toLocaleString()} / {syncProgress.total.toLocaleString()} Items</p>
+                      <h3 className="text-2xl font-black text-gray-800 dark:text-white uppercase">Syncing Batch</h3>
+                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">กำลังดึงสินค้า 500 รายการล่าสุด...</p>
                   </div>
               </div>
           </div>
@@ -204,17 +201,17 @@ export const QCScreen: React.FC = () => {
                       <Database size={28} />
                   </div>
                   <div>
-                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">คลังสินค้าทั้งหมด</p>
+                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">คลังสินค้า (Cloud)</p>
                       <p className="text-3xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()} <span className="text-xs font-normal text-gray-400">Items</span></p>
                   </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-6 group transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="p-5 bg-green-50 dark:bg-green-900/30 rounded-[2rem] text-green-500 group-hover:scale-110 transition-transform">
-                      <ClipboardCheck size={28} />
+                  <div className="p-5 bg-purple-50 dark:bg-purple-900/30 rounded-[2rem] text-purple-500 group-hover:scale-110 transition-transform">
+                      <Box size={28} />
                   </div>
                   <div>
-                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">จำนวนที่ตรวจแล้ว</p>
-                      <p className="text-3xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()} <span className="text-xs font-normal text-gray-400">qc check</span></p>
+                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">Batch System</p>
+                      <p className="text-3xl font-black text-gray-800 dark:text-white">500 <span className="text-xs font-normal text-gray-400">Items/Batch</span></p>
                   </div>
               </div>
               <div className="bg-pastel-blueDark p-8 rounded-[3rem] shadow-2xl shadow-blue-500/20 flex items-center gap-6 group transition-all hover:-translate-y-1 text-white">
@@ -222,8 +219,8 @@ export const QCScreen: React.FC = () => {
                       <Timer size={28} />
                   </div>
                   <div>
-                      <p className="text-[11px] font-black text-blue-100 uppercase tracking-widest mb-1">จำนวนที่เหลืออยู่</p>
-                      <p className="text-3xl font-black">{cloudStats.remaining.toLocaleString()} <span className="text-xs font-normal text-blue-200 opacity-60">Items</span></p>
+                      <p className="text-[11px] font-black text-blue-100 uppercase tracking-widest mb-1">คิวในเครื่อง (Queue)</p>
+                      <p className="text-3xl font-black">{cachedProducts.length.toLocaleString()} <span className="text-xs font-normal text-blue-200 opacity-60">Wait List</span></p>
                   </div>
               </div>
           </div>
