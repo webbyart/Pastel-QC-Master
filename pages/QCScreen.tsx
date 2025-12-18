@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchMasterData, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache } from '../services/db';
+import { fetchMasterData, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache, fetchCloudStats } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw, Search } from 'lucide-react';
+import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw, Box, ClipboardCheck, Timer } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { GoogleGenAI } from "@google/genai";
 
@@ -26,6 +26,10 @@ export const QCScreen: React.FC = () => {
   const [step, setStep] = useState<'scan' | 'form'>('scan');
   
   const [cachedProducts, setCachedProducts] = useState<ProductMaster[]>([]);
+  const [cloudStats, setCloudStats] = useState({ totalInStore: 0, totalChecked: 0 });
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0 });
+
   const [isSaving, setIsSaving] = useState(false);
   const [isAiProcessing, setIsAiProcessing] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -41,9 +45,25 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    // โหลดข้อมูลทั้งหมด 23,000+ รายการเพื่อการค้นหาที่แม่นยำ
-    fetchMasterData(false).then(setCachedProducts);
+    initData();
   }, []);
+
+  const initData = async (force = false) => {
+    setIsSyncing(true);
+    try {
+        const stats = await fetchCloudStats();
+        setCloudStats(stats);
+        
+        const data = await fetchMasterData(force, (current, total) => {
+            setSyncProgress({ current, total });
+        });
+        setCachedProducts(data);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsSyncing(false);
+    }
+  };
 
   const stopScanner = async () => {
     if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
@@ -65,9 +85,7 @@ export const QCScreen: React.FC = () => {
                   qrbox: { width: 300, height: 200 },
                   aspectRatio: 1.0 
                 }, 
-                (decodedText) => {
-                    processBarcode(decodedText);
-                },
+                (decodedText) => processBarcode(decodedText),
                 () => {}
             );
         } catch (err) {
@@ -95,9 +113,7 @@ export const QCScreen: React.FC = () => {
         const base64Data = base64.split(',')[1];
         
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const prompt = `Identify the product identification from this image. 
-        Focus on Barcodes, SKU labels, or Product Names.
-        Return ONLY a JSON object: {"barcode": "ID_if_found", "product_name": "name_if_found"}`;
+        const prompt = `Identify product from image. Output JSON: {"barcode": "found_id", "product_name": "name"}`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -106,13 +122,9 @@ export const QCScreen: React.FC = () => {
         });
 
         const result = JSON.parse(response.text || '{}');
-        
         let found: ProductMaster | undefined;
 
-        if (result.barcode) {
-            found = cachedProducts.find(p => p.barcode.trim() === String(result.barcode).trim());
-        }
-
+        if (result.barcode) found = cachedProducts.find(p => p.barcode.trim() === String(result.barcode).trim());
         if (!found && result.product_name) {
             const searchName = String(result.product_name).toLowerCase();
             found = cachedProducts.find(p => p.productName.toLowerCase().includes(searchName));
@@ -123,10 +135,9 @@ export const QCScreen: React.FC = () => {
             applyProduct(found);
             return;
         }
-        
-        setErrors({ scan: "AI วิเคราะห์แล้วไม่พบรหัสสินค้าที่ตรงกับฐานข้อมูล" });
+        setErrors({ scan: "AI ไม่พบรหัสสินค้าที่ตรงกับฐานข้อมูล" });
     } catch (e) {
-        setErrors({ scan: "AI วิเคราะห์ล้มเหลว กรุณาลองใหม่อีกครั้ง" });
+        setErrors({ scan: "AI วิเคราะห์ล้มเหลว" });
     } finally {
         setIsAiProcessing(false);
     }
@@ -145,32 +156,20 @@ export const QCScreen: React.FC = () => {
   const processBarcode = async (code: string) => {
     const cleanCode = String(code).trim();
     if (!cleanCode) return;
-
     const found = cachedProducts.find(p => p.barcode.toLowerCase() === cleanCode.toLowerCase());
-    
     if (found) {
       stopScanner();
       applyProduct(found);
     } else {
-      // Automatic Fallback to AI Vision if not found via normal scan
-      if (showScanner) {
-        setErrors({ scan: "ไม่พบรหัสในระบบ กำลังเรียกใช้ AI Vision..." });
-        await analyzeWithAi();
-      } else {
-        setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคลังสินค้า` });
-      }
+      if (showScanner) await analyzeWithAi();
+      else setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคลัง` });
     }
   };
 
   const handleSubmit = async () => {
     if (!product || !user) return;
     const price = parseFloat(sellingPrice);
-    const newErrors: any = {};
-    if (isNaN(price)) newErrors.price = 'กรุณาระบุราคาขาย';
-    if ((status === QCStatus.DAMAGE || price === 0) && !reason) newErrors.reason = 'กรุณาระบุสาเหตุ';
-    if ((status === QCStatus.DAMAGE || price === 0) && images.length === 0) newErrors.images = 'กรุณาแนบรูปภาพ';
-
-    if (Object.keys(newErrors).length > 0) { setErrors(newErrors); return; }
+    if (isNaN(price)) { setErrors({ price: 'กรุณาระบุราคา' }); return; }
 
     setIsSaving(true);
     try {
@@ -186,72 +185,126 @@ export const QCScreen: React.FC = () => {
             inspectorId: user.username,
         };
 
-        // 1. Submit to Log & Delete from Master in Cloud
         await submitQCAndRemoveProduct(record);
 
-        // 2. Update Local State (Remove product from local list so it doesn't show up again)
+        // Update local state instantly
         const updatedList = cachedProducts.filter(p => p.barcode !== product.barcode);
         setCachedProducts(updatedList);
+        setCloudStats(prev => ({
+            totalInStore: prev.totalInStore - 1,
+            totalChecked: prev.totalChecked + 1
+        }));
         await updateLocalMasterDataCache(updatedList);
 
         setStep('scan');
         setBarcode('');
         setProduct(null);
-        alert('✅ บันทึกผลสำเร็จ และนำสินค้าออกจากคลังแล้ว');
+        alert('✅ บันทึกสำเร็จ!');
     } catch (e: any) { 
-        alert(`❌ เกิดข้อผิดพลาด: ${e.message}`); 
+        alert(`❌ ผิดพลาด: ${e.message}`); 
     } finally { setIsSaving(false); }
   };
 
   return (
-    <div className="max-w-2xl mx-auto pb-24 px-4">
-      {/* AI Analyzing Visual Feedback */}
+    <div className="max-w-2xl mx-auto pb-24 px-4 animate-fade-in">
+      
+      {/* Dynamic Batch Sync Overlay */}
+      {isSyncing && (
+          <div className="fixed inset-0 z-[300] bg-white/90 dark:bg-gray-900/90 backdrop-blur-md flex flex-col items-center justify-center p-8 text-center animate-fade-in">
+              <div className="bg-white dark:bg-gray-800 p-10 rounded-[3rem] shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-6 max-w-sm w-full">
+                  <div className="relative">
+                      <div className="w-24 h-24 rounded-full border-4 border-gray-100 dark:border-gray-700 border-t-pastel-blueDark animate-spin" />
+                      <Box size={32} className="absolute inset-0 m-auto text-pastel-blueDark" />
+                  </div>
+                  <div className="space-y-1">
+                      <h3 className="text-xl font-black text-gray-800 dark:text-white uppercase tracking-tight">Syncing Master Data...</h3>
+                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">Batch Processing (500/Round)</p>
+                  </div>
+                  <div className="w-full space-y-2">
+                      <div className="w-full h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                          <div 
+                            className="h-full bg-pastel-blueDark transition-all duration-300"
+                            style={{ width: `${(syncProgress.current / (syncProgress.total || 1)) * 100}%` }}
+                          />
+                      </div>
+                      <div className="flex justify-between text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                          <span>{syncProgress.current.toLocaleString()}</span>
+                          <span>{syncProgress.total.toLocaleString()} Items</span>
+                      </div>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* AI Processing Overlay */}
       {isAiProcessing && (
         <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-gray-900/80 backdrop-blur-md animate-fade-in text-center p-8">
-            <div className="bg-white dark:bg-gray-800 p-10 rounded-[3rem] shadow-2xl flex flex-col items-center gap-6 animate-slide-up border border-white/20">
-                <div className="relative">
-                    <Loader2 size={64} className="animate-spin text-pastel-blueDark" />
-                    <Sparkles size={24} className="absolute inset-0 m-auto text-pastel-blueDark animate-pulse" />
-                </div>
-                <div className="space-y-1">
-                    <h3 className="text-xl font-black text-gray-800 dark:text-white uppercase tracking-tight">AI Analyzing Image...</h3>
-                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">Searching 23,000+ items</p>
-                </div>
+            <div className="bg-white dark:bg-gray-800 p-10 rounded-[3rem] shadow-2xl flex flex-col items-center gap-6 animate-slide-up">
+                <Loader2 size={64} className="animate-spin text-pastel-blueDark" />
+                <h3 className="text-xl font-black text-gray-800 dark:text-white uppercase tracking-tight">AI Vision Scanning...</h3>
             </div>
         </div>
       )}
 
       {step === 'scan' ? (
-        <div className="flex flex-col items-center justify-center min-h-[70vh] gap-8 animate-fade-in py-8">
-          <div className="relative p-12 bg-gradient-to-br from-pastel-blueDark to-blue-900 rounded-[4rem] shadow-2xl shadow-blue-500/40 text-white group cursor-pointer active:scale-95 transition-all">
-            <Scan size={80} strokeWidth={1} className="group-hover:scale-110 transition-transform" />
+        <div className="space-y-8 py-4">
+          
+          {/* Live Stats Header Panel */}
+          <div className="grid grid-cols-3 gap-3">
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-1">
+                  <Box size={16} className="text-blue-500 mb-1" />
+                  <span className="text-[14px] font-black text-gray-800 dark:text-white">{cloudStats.totalInStore.toLocaleString()}</span>
+                  <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">คลังทั้งหมด</span>
+              </div>
+              <div className="bg-white dark:bg-gray-800 p-4 rounded-3xl shadow-sm border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-1">
+                  <ClipboardCheck size={16} className="text-green-500 mb-1" />
+                  <span className="text-[14px] font-black text-gray-800 dark:text-white">{cloudStats.totalChecked.toLocaleString()}</span>
+                  <span className="text-[8px] font-black text-gray-400 uppercase tracking-wider">ตรวจแล้ว</span>
+              </div>
+              <div className="bg-pastel-blueDark p-4 rounded-3xl shadow-lg flex flex-col items-center gap-1 text-white">
+                  <Timer size={16} className="text-blue-100 mb-1" />
+                  <span className="text-[14px] font-black">{cloudStats.totalInStore.toLocaleString()}</span>
+                  <span className="text-[8px] font-black text-blue-100 uppercase tracking-wider">คงเหลือ</span>
+              </div>
           </div>
 
-          <div className="text-center">
-            <h2 className="text-3xl font-display font-bold text-gray-800 dark:text-white">QC SCANNER</h2>
-            <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] mt-1">คลังคงเหลือ: {cachedProducts.length.toLocaleString()} รายการ</p>
-          </div>
-          
-          <div className="w-full max-w-sm space-y-4">
-            <div className="relative">
-                <input
-                  type="text" autoFocus value={barcode}
-                  onChange={(e) => setBarcode(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && processBarcode(barcode)}
-                  placeholder="สแกน หรือ พิมพ์รหัสบาร์โค้ด..."
-                  className="w-full pl-6 pr-16 py-5 text-lg rounded-3xl bg-white dark:bg-gray-800 shadow-xl border-none focus:ring-2 focus:ring-pastel-blueDark transition-all font-mono"
-                />
-                <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg hover:scale-105 active:scale-95 transition-all">
-                  <Camera size={24} />
-                </button>
+          <div className="flex flex-col items-center justify-center gap-8 py-8">
+            <div className="relative p-12 bg-gradient-to-br from-pastel-blueDark to-blue-900 rounded-[4rem] shadow-2xl shadow-blue-500/40 text-white active:scale-95 transition-all">
+                <Scan size={80} strokeWidth={1} />
             </div>
 
-            {errors.scan && (
-              <div className="bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100 dark:border-red-900/20 animate-slide-up">
-                  <AlertCircle size={20} className="flex-shrink-0" />
-                  <span>{errors.scan}</span>
-              </div>
-            )}
+            <div className="text-center">
+                <h2 className="text-3xl font-display font-bold text-gray-800 dark:text-white">QC SCANNER</h2>
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] mt-1">Smart Detection System</p>
+            </div>
+            
+            <div className="w-full max-w-sm space-y-4">
+                <div className="relative">
+                    <input
+                      type="text" autoFocus value={barcode}
+                      onChange={(e) => setBarcode(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && processBarcode(barcode)}
+                      placeholder="สแกน หรือ พิมพ์รหัสบาร์โค้ด..."
+                      className="w-full pl-6 pr-16 py-5 text-lg rounded-3xl bg-white dark:bg-gray-800 shadow-xl border-none focus:ring-2 focus:ring-pastel-blueDark transition-all font-mono"
+                    />
+                    <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg">
+                        <Camera size={24} />
+                    </button>
+                </div>
+
+                <div className="flex justify-center">
+                    <button onClick={() => initData(true)} className="flex items-center gap-2 text-[10px] font-black text-gray-400 uppercase tracking-widest hover:text-pastel-blueDark transition-colors">
+                        <RefreshCw size={12} /> Force Sync Cloud
+                    </button>
+                </div>
+
+                {errors.scan && (
+                <div className="bg-red-50 dark:bg-red-900/10 text-red-600 dark:text-red-400 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100 dark:border-red-900/20">
+                    <AlertCircle size={20} className="flex-shrink-0" />
+                    <span>{errors.scan}</span>
+                </div>
+                )}
+            </div>
           </div>
         </div>
       ) : (
@@ -269,11 +322,11 @@ export const QCScreen: React.FC = () => {
 
           <div className="p-8 space-y-8">
               <div className="grid grid-cols-2 gap-4">
-                  <button onClick={() => setStatus(QCStatus.PASS)} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50 dark:bg-green-900/10 text-green-700 dark:text-green-400 scale-[1.05] shadow-lg shadow-green-500/10' : 'border-gray-50 dark:border-gray-700 opacity-40'}`}>
+                  <button onClick={() => setStatus(QCStatus.PASS)} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50 dark:bg-green-900/10 text-green-700 dark:text-green-400 scale-[1.05] shadow-lg' : 'border-gray-50 dark:border-gray-700 opacity-40'}`}>
                       <CheckCircle2 size={48} />
                       <span className="text-xs font-black uppercase tracking-widest">ผ่าน (Pass)</span>
                   </button>
-                  <button onClick={() => setStatus(QCStatus.DAMAGE)} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.DAMAGE ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-700 dark:text-red-400 scale-[1.05] shadow-lg shadow-red-500/10' : 'border-gray-50 dark:border-gray-700 opacity-40'}`}>
+                  <button onClick={() => setStatus(QCStatus.DAMAGE)} className={`p-8 rounded-[2.5rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.DAMAGE ? 'border-red-500 bg-red-50 dark:bg-red-900/10 text-red-700 dark:text-red-400 scale-[1.05] shadow-lg' : 'border-gray-50 dark:border-gray-700 opacity-40'}`}>
                       <AlertTriangle size={48} />
                       <span className="text-xs font-black uppercase tracking-widest">ชำรุด (Damage)</span>
                   </button>
@@ -285,7 +338,7 @@ export const QCScreen: React.FC = () => {
                       <span className="absolute left-7 top-1/2 -translate-y-1/2 text-3xl font-bold text-gray-300">฿</span>
                       <input 
                         type="number" step="0.01" value={sellingPrice} onChange={e => setSellingPrice(e.target.value)}
-                        className="w-full pl-14 pr-8 py-6 bg-gray-50 dark:bg-gray-900 rounded-[2.5rem] text-4xl font-mono font-bold outline-none border-2 border-transparent focus:border-pastel-blueDark"
+                        className="w-full pl-14 pr-8 py-6 bg-gray-50 dark:bg-gray-900 rounded-[2.5rem] text-4xl font-mono font-bold outline-none border-none focus:ring-2 focus:ring-pastel-blueDark"
                         placeholder="0.00"
                       />
                   </div>
@@ -293,35 +346,28 @@ export const QCScreen: React.FC = () => {
 
               {status === QCStatus.DAMAGE && (
                   <div className="space-y-6 p-6 bg-gray-50 dark:bg-gray-900 rounded-[2.5rem] animate-slide-up">
-                      <div className="space-y-2">
-                          <label className="text-[10px] font-black uppercase text-gray-500 ml-2 tracking-widest">สาเหตุ (Reason)</label>
-                          <select value={reason} onChange={e => setReason(e.target.value)} className="w-full p-4 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-medium border-none shadow-sm">
-                              <option value="">-- ระบุสาเหตุที่พบ --</option>
-                              {REASON_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                          </select>
-                      </div>
-
-                      <div className="space-y-4">
-                          <label className="text-[10px] font-black uppercase text-gray-500 ml-2 tracking-widest">รูปภาพหลักฐาน ({images.length}/5)</label>
-                          <div className="flex flex-wrap gap-3">
-                              {images.length < 5 && (
-                                <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-gray-300 bg-white dark:bg-gray-800 flex flex-col items-center justify-center text-gray-400 cursor-pointer hover:border-pastel-blueDark transition-all">
-                                    <Camera size={24} />
-                                    <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
-                                        if (e.target.files?.[0]) {
-                                            const img = await compressImage(e.target.files[0]);
-                                            setImages([...images, img]);
-                                        }
-                                    }} />
-                                </label>
-                              )}
-                              {images.map((img, idx) => (
-                                  <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-md">
-                                      <img src={img} className="w-full h-full object-cover" />
-                                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-md"><X size={12}/></button>
-                                  </div>
-                              ))}
-                          </div>
+                      <select value={reason} onChange={e => setReason(e.target.value)} className="w-full p-4 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-medium border-none shadow-sm">
+                          <option value="">-- ระบุสาเหตุที่พบ --</option>
+                          {REASON_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                      <div className="flex flex-wrap gap-3">
+                          {images.length < 5 && (
+                            <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-gray-300 bg-white dark:bg-gray-800 flex items-center justify-center text-gray-400 cursor-pointer">
+                                <Camera size={24} />
+                                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                                    if (e.target.files?.[0]) {
+                                        const img = await compressImage(e.target.files[0]);
+                                        setImages([...images, img]);
+                                    }
+                                }} />
+                            </label>
+                          )}
+                          {images.map((img, idx) => (
+                              <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-md">
+                                  <img src={img} className="w-full h-full object-cover" />
+                                  <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-md"><X size={12}/></button>
+                              </div>
+                          ))}
                       </div>
                   </div>
               )}
@@ -330,7 +376,7 @@ export const QCScreen: React.FC = () => {
                 onClick={handleSubmit} disabled={isSaving} 
                 className="w-full py-6 rounded-[2.5rem] bg-pastel-blueDark text-white font-bold text-lg shadow-xl shadow-blue-500/30 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50"
               >
-                  {isSaving ? <Loader2 className="animate-spin" /> : <>บันทึก และนำออกจากคลัง (Submit) <Zap size={20} fill="currentColor" /></>}
+                  {isSaving ? <Loader2 className="animate-spin" /> : <>บันทึกผลตรวจสอบ <Zap size={20} fill="currentColor" /></>}
               </button>
           </div>
         </div>
@@ -352,7 +398,7 @@ export const QCScreen: React.FC = () => {
                 {isAiProcessing ? <Loader2 size={20} className="animate-spin" /> : <Sparkles size={20} className="text-pastel-blueDark" />}
                 <span className="text-xs uppercase tracking-widest">{isAiProcessing ? 'AI Analysing...' : 'AI Vision Assistant'}</span>
             </button>
-            <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest text-center px-8 leading-relaxed">หากสแกนปกติไม่ติด กรุณากดปุ่ม AI ด้านบนเพื่อช่วยค้นหา</p>
+            <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest text-center">หากสแกนปกติไม่ติด กรุณากดปุ่ม AI ด้านบน</p>
           </div>
         </div>
       )}
