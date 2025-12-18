@@ -68,6 +68,47 @@ export const setSupabaseConfig = (url: string, key: string) => {
 
 export const getApiUrl = (): string => getSupabaseConfig().url;
 
+/**
+ * Validates Supabase connection and checks for required tables.
+ */
+export const testApiConnection = async (url: string, key: string): Promise<{success: boolean, message?: string, error?: string}> => {
+    try {
+        const endpoint = `${url}/rest/v1/products?select=barcode&limit=1`;
+        const headers: HeadersInit = {
+            'apikey': key,
+            'Authorization': `Bearer ${key}`,
+            'Content-Type': 'application/json'
+        };
+        const res = await fetch(endpoint, { method: 'GET', headers });
+        
+        if (!res.ok) {
+            const errText = await res.text();
+            if (res.status === 404 || errText.includes("Could not find the table") || errText.includes("schema cache")) {
+                return { success: false, error: "CONNECTED_BUT_TABLES_MISSING" };
+            }
+            return { success: false, error: errText || `Error ${res.status}` };
+        }
+        return { success: true, message: "Connected successfully!" };
+    } catch (e: any) {
+        return { success: false, error: e.message };
+    }
+};
+
+/**
+ * Handles user login logic.
+ */
+export const loginUser = (username: string): User | null => {
+  const normalized = username.toLowerCase().trim();
+  if (normalized === 'admin' || normalized === 'user') {
+    return {
+      id: normalized === 'admin' ? '1' : '2',
+      username: normalized,
+      role: normalized === 'admin' ? 'admin' : 'user'
+    };
+  }
+  return null;
+};
+
 const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: any, query: string = '') => {
     const { url, key } = getSupabaseConfig();
     if (!url || !key) throw new Error("Missing Supabase configuration.");
@@ -102,13 +143,22 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
             throw new Error(msg);
         }
         
-        // Fix: Properly handle 204 No Content or empty responses
-        if (res.status === 204) return true;
+        // Fix: Properly handle 201 Created or 204 No Content (Empty Responses)
+        if (res.status === 204 || res.status === 201) {
+            const text = await res.text();
+            if (!text) return true;
+            try { return JSON.parse(text); } catch(e) { return true; }
+        }
         
         const responseText = await res.text();
         if (!responseText) return true;
         
-        return JSON.parse(responseText);
+        try {
+            return JSON.parse(responseText);
+        } catch (jsonErr) {
+            console.warn("Response was not JSON but request was successful:", responseText);
+            return true;
+        }
     } catch (e: any) {
         console.error(`Supabase call failed [${table}]:`, e);
         if (e.message.startsWith('TABLE_NOT_FOUND')) throw e;
@@ -119,57 +169,6 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         }
         throw e;
     }
-};
-
-export const testApiConnection = async (testUrl?: string, testKey?: string) => {
-    const config = { 
-        url: testUrl || getSupabaseConfig().url, 
-        key: testKey || getSupabaseConfig().key 
-    };
-    
-    if (!config.url || !config.key) return { success: false, error: "Configuration missing" };
-    
-    try {
-        const res = await fetch(`${config.url}/rest/v1/`, {
-            method: 'GET',
-            headers: { 'apikey': config.key, 'Authorization': `Bearer ${config.key}` }
-        });
-
-        if (!res.ok) {
-            const errText = await res.text();
-            let errData: any = {};
-            try { errData = JSON.parse(errText); } catch(e) {}
-            return { success: false, error: errData.message || "Failed to connect to API" };
-        }
-
-        const tablesRes = await fetch(`${config.url}/rest/v1/products?select=barcode&limit=1`, {
-            method: 'GET',
-            headers: { 'apikey': config.key, 'Authorization': `Bearer ${config.key}` }
-        });
-
-        if (!tablesRes.ok) {
-            const errText = await tablesRes.text();
-            if (errText.includes("Could not find the table")) {
-                return { success: false, error: "CONNECTED_BUT_TABLES_MISSING" };
-            }
-            return { success: false, error: "Table verification failed" };
-        }
-        
-        return { success: true, message: "Connected and tables found!" };
-    } catch (e: any) {
-        return { 
-            success: false, 
-            error: "Network Error: Check URL/Key.",
-            isMixedContent: window.location.protocol === 'https:' && config.url.startsWith('http:')
-        };
-    }
-};
-
-export const loginUser = (username: string): User | null => {
-  const u = username.toLowerCase();
-  if (u === 'admin') return { id: '1', username: 'admin', role: 'admin' };
-  if (u === 'user') return { id: '2', username: 'user', role: 'user' };
-  return null;
 };
 
 export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaster[]> => {
@@ -190,7 +189,6 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
             return mapped;
         }
     } catch (e: any) {
-        console.warn("fetchMasterData fail:", e);
         if (e.message?.includes('TABLE_NOT_FOUND')) throw e;
     }
     return cached || [];
@@ -209,8 +207,7 @@ export const saveQCRecord = async (record: any) => {
         image_urls: record.imageUrls,
         timestamp: new Date().toISOString()
     };
-    await callSupabase('qc_logs', 'POST', payload);
-    await dbDel(KEYS.CACHE_LOGS);
+    return await callSupabase('qc_logs', 'POST', payload);
 };
 
 export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
@@ -236,44 +233,10 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
             return mapped;
         }
     } catch (e: any) {
-        console.warn("fetchQCLogs fail:", e);
         if (forceUpdate) throw e; 
     }
     return cached || [];
 };
-
-export const saveProduct = async (p: ProductMaster) => {
-    const payload = {
-        barcode: p.barcode,
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
-    };
-    return await callSupabase('products', 'POST', payload);
-};
-
-export const bulkSaveProducts = async (products: ProductMaster[]) => {
-    const payloads = products.map(p => ({
-        barcode: p.barcode,
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
-    }));
-    await callSupabase('products', 'POST', payloads);
-    await dbSet(KEYS.CACHE_MASTER, products);
-    return true;
-};
-
-export const clearRemoteMasterData = async () => {
-    console.warn("Truncate table via REST is not allowed. Use Supabase SQL Editor.");
-};
-
-export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
-export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
 
 export const compressImage = (file: File): Promise<string> => {
     return new Promise((resolve) => {
@@ -325,6 +288,43 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
     });
 };
 
+export const saveProduct = async (p: ProductMaster) => {
+    const payload = {
+        barcode: p.barcode,
+        product_name: p.productName,
+        cost_price: p.costPrice,
+        unit_price: p.unitPrice,
+        lot_no: p.lotNo,
+        product_type: p.productType
+    };
+    return await callSupabase('products', 'POST', payload);
+};
+
+// Fixed bulkSaveProducts to use correct ProductMaster property names
+export const bulkSaveProducts = async (products: ProductMaster[]) => {
+    const payloads = products.map(p => ({
+        barcode: p.barcode,
+        product_name: p.productName,
+        cost_price: p.costPrice,
+        unit_price: p.unitPrice,
+        lot_no: p.lotNo,
+        product_type: p.productType
+    }));
+    await callSupabase('products', 'POST', payloads);
+    await dbSet(KEYS.CACHE_MASTER, products);
+    return true;
+};
+
+export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
+
+// Added missing clearRemoteMasterData function
+export const clearRemoteMasterData = async () => {
+    return await callSupabase('products', 'DELETE', null, '?barcode=neq.EMPTY_VAL_888');
+};
+
+export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
+export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
+
 export const exportQCLogs = async () => {
     const logs = await fetchQCLogs(false);
     if (logs.length === 0) return;
@@ -353,13 +353,4 @@ export const exportMasterData = async () => {
     XLSX.utils.book_append_sheet(workbook, worksheet, "MasterData");
     XLSX.writeFile(workbook, "MasterData_Export.xlsx");
     return true;
-};
-
-export const deleteProduct = async (barcode: string) => {
-    await callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
-};
-
-export const clearCache = async () => { 
-    await dbDel(KEYS.CACHE_MASTER); 
-    await dbDel(KEYS.CACHE_LOGS); 
 };

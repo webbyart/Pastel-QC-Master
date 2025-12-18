@@ -3,10 +3,9 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterData, saveQCRecord, compressImage, getApiUrl } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-// Added AlertCircle to imports
-import { Scan, Camera, X, CheckCircle2, AlertTriangle, ArrowLeft, ArrowRight, Eye, ChevronDown, Loader2, RefreshCw, Sparkles, ImageIcon, Search, Zap, AlertCircle } from 'lucide-react';
+import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, RefreshCw, Sparkles, Zap, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { Html5QrcodeScanner } from "html5-qrcode";
+import { Html5Qrcode } from "html5-qrcode";
 import { GoogleGenAI } from "@google/genai";
 
 const REASON_OPTIONS = [
@@ -42,8 +41,7 @@ export const QCScreen: React.FC = () => {
   const [images, setImages] = useState<string[]>([]);
   const [errors, setErrors] = useState<{[key:string]: string}>({});
 
-  const inputRef = useRef<HTMLInputElement>(null);
-  const scannerRef = useRef<any>(null);
+  const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -56,30 +54,44 @@ export const QCScreen: React.FC = () => {
     init();
   }, []);
 
-  useEffect(() => {
-    if (showScanner) {
-      const scanner = new Html5QrcodeScanner("reader", { 
-        fps: 15, 
-        qrbox: { width: 250, height: 150 },
-        aspectRatio: 1.0,
-        showTorchButtonIfSupported: true
-      }, false);
-      
-      scanner.render((decodedText) => {
-        scanner.clear();
-        setShowScanner(false);
-        processBarcode(decodedText);
-      }, (error) => {
-        // quiet error
-      });
-      scannerRef.current = scanner;
+  const stopScanner = async () => {
+    if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        try {
+            await html5QrCodeRef.current.stop();
+        } catch (e) {
+            console.warn("Scanner stop error", e);
+        }
     }
-    return () => {
-      if (scannerRef.current) {
-        try { scannerRef.current.clear(); } catch(e) {}
-      }
-    };
-  }, [showScanner]);
+    setShowScanner(false);
+  };
+
+  const startScanner = async () => {
+    setShowScanner(true);
+    // Wait for DOM
+    setTimeout(async () => {
+        try {
+            const html5QrCode = new Html5Qrcode("reader");
+            html5QrCodeRef.current = html5QrCode;
+            
+            const config = { fps: 10, qrbox: { width: 250, height: 180 } };
+            
+            // Try environment camera (back camera) first
+            await html5QrCode.start(
+                { facingMode: "environment" }, 
+                config, 
+                (decodedText) => {
+                    stopScanner();
+                    processBarcode(decodedText);
+                },
+                (errorMessage) => { /* quiet on failure */ }
+            );
+        } catch (err) {
+            console.error("Scanner start error", err);
+            alert("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบสิทธิ์การใช้งานกล้อง");
+            setShowScanner(false);
+        }
+    }, 100);
+  };
 
   const processBarcode = (code: string) => {
     const cleanCode = code.trim();
@@ -97,7 +109,7 @@ export const QCScreen: React.FC = () => {
     }
   };
 
-  const handleSmartIdentify = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleAiRefinement = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || !e.target.files[0]) return;
     
     setIsAiProcessing(true);
@@ -108,9 +120,8 @@ export const QCScreen: React.FC = () => {
       const base64 = await compressImage(file);
       const base64Data = base64.split(',')[1];
 
-      // Initializing AI client with proper syntax
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const prompt = `จากภาพนี้ โปรดช่วยวิเคราะห์บาร์โค้ด (barcode) หรือชื่อสินค้าที่คุณเห็น โดยพยายามหา Barcode (ที่เป็นตัวเลขหรือรหัส) หากเห็นชื่อสินค้าด้วยให้แจ้งมาด้วย ตอบเป็น JSON เท่านั้นในรูปแบบ { "barcode": "string", "product_name": "string", "confidence": "number" }`;
+      const prompt = `วิเคราะห์ภาพสินค้าและฉลากบาร์โค้ดนี้ โปรดดึงข้อมูล "barcode" ออกมาอย่างแม่นยำที่สุด หากมีหลายเลขให้เลือกเลขที่ยาวที่สุดที่ดูเหมือนบาร์โค้ดสินค้า และระบุชื่อสินค้า (product_name) ด้วย หากอ่านบาร์โค้ดไม่ได้ ให้พยายามเดาจากชื่อสินค้า ตอบเป็น JSON เท่านั้น: { "barcode": "string", "product_name": "string", "confidence": "high|medium|low" }`;
       
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
@@ -123,13 +134,11 @@ export const QCScreen: React.FC = () => {
         config: { responseMimeType: 'application/json' }
       });
 
-      // Accessing response text directly via .text property
       const result = JSON.parse(response.text || '{}');
       if (result.barcode) {
         setBarcode(result.barcode);
         processBarcode(result.barcode);
       } else if (result.product_name) {
-        // Search by name if barcode not found
         const foundByName = cachedProducts.find(p => 
           p.productName.toLowerCase().includes(result.product_name.toLowerCase())
         );
@@ -137,14 +146,13 @@ export const QCScreen: React.FC = () => {
           setProduct(foundByName);
           setStep('form');
         } else {
-            setErrors({ scan: `AI ระบุว่าเป็น "${result.product_name}" แต่ไม่พบในคลังสินค้า` });
+            setErrors({ scan: `AI ระบุว่าเป็น "${result.product_name}" แต่ไม่พบในคลัง` });
         }
       } else {
-          setErrors({ scan: "AI ไม่สามารถระบุข้อมูลสินค้าจากภาพได้ชัดเจน" });
+          setErrors({ scan: "AI ไม่สามารถระบุข้อมูลสินค้าได้" });
       }
     } catch (err) {
-      console.error(err);
-      setErrors({ scan: "เกิดข้อผิดพลาดในการใช้ AI วิเคราะห์ภาพ" });
+      setErrors({ scan: "AI Error: ไม่สามารถประมวลผลภาพได้" });
     } finally {
       setIsAiProcessing(false);
       e.target.value = '';
@@ -167,7 +175,6 @@ export const QCScreen: React.FC = () => {
     if (!product || !user) return;
     const price = parseFloat(sellingPrice);
     
-    // Validation
     const newErrors: any = {};
     if (isNaN(price)) newErrors.price = 'ระบุราคาขาย';
     if ((status === QCStatus.DAMAGE || price === 0) && !reason) newErrors.reason = 'ระบุสาเหตุ';
@@ -190,17 +197,17 @@ export const QCScreen: React.FC = () => {
             remark,
             imageUrls: images,
             inspectorId: user.username,
-            lotNo: product.lotNo,
-            productType: product.productType,
-            unitPrice: product.unitPrice,
-            rmsId: product.barcode
         });
         setStep('scan');
         setBarcode('');
         setProduct(null);
         setErrors({});
-    } catch (e) { alert("เกิดข้อผิดพลาดในการบันทึก"); }
-    finally { setIsSaving(false); }
+    } catch (e: any) { 
+        console.error(e);
+        alert(`เกิดข้อผิดพลาดในการบันทึก: ${e.message}`); 
+    } finally { 
+        setIsSaving(false); 
+    }
   };
 
   return (
@@ -223,32 +230,29 @@ export const QCScreen: React.FC = () => {
           <div className="w-full max-w-sm space-y-4">
             <div className="relative">
                 <input
-                  ref={inputRef}
                   type="text" autoFocus value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && processBarcode(barcode)}
-                  placeholder="กรอกรหัสบาร์โค้ดสินค้า..."
+                  placeholder="กรอกบาร์โค้ดสินค้า..."
                   className="w-full pl-6 pr-14 py-5 text-lg rounded-3xl bg-white dark:bg-gray-800 shadow-xl border-none focus:ring-4 focus:ring-blue-500/10 transition-all font-mono placeholder:font-sans placeholder:text-sm"
                 />
                 <button 
-                  onClick={() => setShowScanner(true)} 
+                  onClick={startScanner} 
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-blue-500 p-3 hover:bg-blue-50 dark:hover:bg-gray-700 rounded-2xl transition-colors"
                 >
                   <Camera size={24} />
                 </button>
             </div>
 
-            {/* AI Smart Identify Option */}
             <div className="grid grid-cols-1 gap-2">
                 <label className={`
                     flex items-center justify-center gap-2 w-full py-4 rounded-3xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-2 border-dashed border-gray-200 dark:border-gray-700 hover:border-pastel-blueDark transition-all cursor-pointer text-xs font-bold
                     ${isAiProcessing ? 'opacity-50 cursor-not-allowed' : ''}
                 `}>
                     {isAiProcessing ? <Loader2 size={18} className="animate-spin text-pastel-blueDark"/> : <Sparkles size={18} className="text-amber-500" />}
-                    <span>{isAiProcessing ? 'กำลังใช้ AI วิเคราะห์ภาพ...' : 'ถ่ายรูปให้ AI ช่วยหาบาร์โค้ด'}</span>
-                    <input type="file" accept="image/*" className="hidden" onChange={handleSmartIdentify} disabled={isAiProcessing} />
+                    <span>{isAiProcessing ? 'AI กำลังประมวลผล...' : 'AI Smart Identify (ใช้ภาพถ่าย)'}</span>
+                    <input type="file" accept="image/*" className="hidden" onChange={handleAiRefinement} disabled={isAiProcessing} />
                 </label>
-                <p className="text-[10px] text-gray-400 text-center px-4 italic">ใช้ AI วิเคราะห์บาร์โค้ดหรือชื่อสินค้าจากภาพถ่ายหากเครื่องสแกนมีปัญหา</p>
             </div>
 
             {errors.scan && (
@@ -276,7 +280,6 @@ export const QCScreen: React.FC = () => {
           </div>
 
           <div className="p-6 space-y-6">
-              {/* Status Section */}
               <div className="grid grid-cols-2 gap-3">
                   <button onClick={() => setStatus(QCStatus.PASS)} className={`p-5 rounded-3xl border-2 flex flex-col items-center gap-1.5 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50 text-green-700 shadow-lg shadow-green-500/10' : 'border-gray-50 dark:border-gray-700 grayscale opacity-40'}`}>
                       <CheckCircle2 size={32} />
@@ -288,9 +291,8 @@ export const QCScreen: React.FC = () => {
                   </button>
               </div>
 
-              {/* Price Input */}
               <div className="space-y-1.5">
-                  <label className="text-[10px] font-black uppercase text-gray-400 ml-1 tracking-widest">ราคาขายหน้าสาขา (Sale Price) <span className="text-red-500">*</span></label>
+                  <label className="text-[10px] font-black uppercase text-gray-400 ml-1 tracking-widest">ราคาขายหน้าสาขา <span className="text-red-500">*</span></label>
                   <div className="relative">
                       <span className="absolute left-6 top-1/2 -translate-y-1/2 text-2xl font-bold text-gray-300">฿</span>
                       <input 
@@ -302,11 +304,10 @@ export const QCScreen: React.FC = () => {
                   {errors.price && <p className="text-[10px] font-bold text-red-500 ml-2">{errors.price}</p>}
               </div>
 
-              {/* Advanced Fields for Damage/Zero Price */}
               {(status === QCStatus.DAMAGE || parseFloat(sellingPrice) === 0) && (
                   <div className="space-y-5 p-5 bg-orange-50 dark:bg-orange-900/10 rounded-3xl border border-orange-100 dark:border-orange-900/30 animate-fade-in">
                       <div className="space-y-1.5">
-                          <label className="text-[10px] font-black uppercase text-orange-800 dark:text-orange-400 ml-1 tracking-widest">สาเหตุ (Reason) <span className="text-red-500">*</span></label>
+                          <label className="text-[10px] font-black uppercase text-orange-800 dark:text-orange-400 ml-1 tracking-widest">สาเหตุ <span className="text-red-500">*</span></label>
                           <select 
                             value={reason} onChange={e => setReason(e.target.value)}
                             className="w-full p-4 rounded-2xl bg-white dark:bg-gray-800 border-none shadow-sm outline-none focus:ring-2 focus:ring-orange-500 text-sm font-medium"
@@ -314,29 +315,25 @@ export const QCScreen: React.FC = () => {
                               <option value="">-- เลือกสาเหตุ --</option>
                               {REASON_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                           </select>
-                          {errors.reason && <p className="text-[10px] font-bold text-red-500 ml-2">{errors.reason}</p>}
                       </div>
                       <div className="space-y-2">
                           <label className="text-[10px] font-black uppercase text-orange-800 dark:text-orange-400 ml-1 tracking-widest">รูปถ่ายหลักฐาน <span className="text-red-500">*</span></label>
                           <div className="flex flex-wrap gap-3">
-                              <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-orange-200 bg-white flex flex-col items-center justify-center text-orange-400 cursor-pointer hover:bg-orange-50 transition-colors">
+                              <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-orange-200 bg-white dark:bg-gray-700 flex flex-col items-center justify-center text-orange-400 cursor-pointer hover:bg-orange-50 transition-colors">
                                   <Camera size={20} />
-                                  <span className="text-[9px] font-black uppercase mt-1">Add Photo</span>
                                   <input type="file" accept="image/*" multiple className="hidden" onChange={handleImageUpload} />
                               </label>
                               {images.map((img, idx) => (
-                                  <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-md border-2 border-white">
+                                  <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-md">
                                       <img src={img} className="w-full h-full object-cover" />
-                                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1 shadow-md"><X size={10}/></button>
+                                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><X size={10}/></button>
                                   </div>
                               ))}
                           </div>
-                          {errors.images && <p className="text-[10px] font-bold text-red-500 ml-2">{errors.images}</p>}
                       </div>
                   </div>
               )}
 
-              {/* Final Submit */}
               <button 
                 onClick={handleSubmit} disabled={isSaving}
                 className="w-full py-5 rounded-[2rem] bg-gradient-to-r from-pastel-blueDark to-blue-800 text-white font-bold text-lg shadow-xl shadow-blue-500/20 active:scale-95 transition-all flex items-center justify-center gap-3 disabled:opacity-50"
@@ -347,16 +344,15 @@ export const QCScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Barcode Scanner Modal */}
       {showScanner && (
         <div className="fixed inset-0 z-[100] flex flex-col bg-black">
           <div className="p-6 flex justify-between items-center text-white">
             <h3 className="font-bold flex items-center gap-2"><Scan size={20} /> สแกนบาร์โค้ด</h3>
-            <button onClick={() => setShowScanner(false)} className="p-2 bg-white/10 rounded-full"><X size={20} /></button>
+            <button onClick={stopScanner} className="p-2 bg-white/10 rounded-full"><X size={20} /></button>
           </div>
-          <div id="reader" className="flex-1 w-full flex items-center justify-center"></div>
-          <div className="p-8 text-white text-center text-sm font-medium opacity-60">
-            จัดวางบาร์โค้ดให้อยู่ในกรอบสี่เหลี่ยม
+          <div id="reader" className="flex-1 w-full bg-black"></div>
+          <div className="p-8 text-white text-center text-xs opacity-60">
+            หันกล้องไปที่บาร์โค้ดของสินค้า (เน้นใช้กล้องหลัง)
           </div>
         </div>
       )}
