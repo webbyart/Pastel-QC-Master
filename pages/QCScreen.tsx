@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterData, saveQCRecord, compressImage } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw } from 'lucide-react';
+import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw, Search } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { GoogleGenAI } from "@google/genai";
 
@@ -41,7 +41,6 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    // Force sync with cloud on mount to ensure latest data
     fetchMasterData(true).then(setCachedProducts);
   }, []);
 
@@ -58,7 +57,6 @@ export const QCScreen: React.FC = () => {
         try {
             const html5QrCode = new Html5Qrcode("reader");
             html5QrCodeRef.current = html5QrCode;
-            // CRITICAL: Force rear camera for barcode precision
             await html5QrCode.start(
                 { facingMode: "environment" }, 
                 { 
@@ -67,19 +65,18 @@ export const QCScreen: React.FC = () => {
                   aspectRatio: 1.0 
                 }, 
                 (decodedText) => {
-                    stopScanner();
+                    // When scanned successfully, try direct process
                     processBarcode(decodedText);
                 },
                 () => {}
             );
         } catch (err) {
-            alert("ไม่สามารถเปิดกล้องหลังได้ กรุณาตรวจสอบสิทธิ์การเข้าถึงกล้อง");
+            alert("ไม่สามารถเปิดกล้องได้ กรุณาตรวจสอบสิทธิ์การใช้งานกล้อง");
             setShowScanner(false);
         }
     }, 150);
   };
 
-  // AI-Powered: Capture frame from live video and identify barcode
   const analyzeWithAi = async () => {
     const video = document.querySelector('#reader video') as HTMLVideoElement;
     if (!video) return;
@@ -91,62 +88,85 @@ export const QCScreen: React.FC = () => {
         canvas.height = video.videoHeight;
         canvas.getContext('2d')?.drawImage(video, 0, 0);
         
-        canvas.toBlob(async (blob) => {
-            if (!blob) return;
-            const base64 = await compressImage(blob);
-            const base64Data = base64.split(',')[1];
-            
-            const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const prompt = `Find any visible barcode or SKU label in this image. 
-            Identify the string code (like EAN-13, RMS ID, etc.). 
-            Return JSON: {"barcode": "string_or_null", "product_name": "string_or_null"}`;
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
+        if (!blob) throw new Error("Canvas to Blob failed");
 
-            const response = await ai.models.generateContent({
-                model: 'gemini-3-flash-preview',
-                contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }] },
-                config: { responseMimeType: 'application/json', temperature: 0.1 }
-            });
+        const base64 = await compressImage(blob);
+        const base64Data = base64.split(',')[1];
+        
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const prompt = `Identify any product identification from this image. 
+        Look for Barcodes, QR codes, RMS IDs, SKU, or Product Name labels.
+        Output MUST be in JSON format: {"barcode": "found_code_or_null", "product_name": "detected_name_or_null"}`;
 
-            const result = JSON.parse(response.text || '{}');
-            if (result.barcode) {
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }] },
+            config: { responseMimeType: 'application/json', temperature: 0.1 }
+        });
+
+        const result = JSON.parse(response.text || '{}');
+        
+        if (result.barcode) {
+            // Re-attempt search with AI-found barcode
+            const foundByAiBarcode = cachedProducts.find(p => p.barcode.trim().toLowerCase() === String(result.barcode).trim().toLowerCase());
+            if (foundByAiBarcode) {
                 stopScanner();
-                processBarcode(result.barcode);
-            } else if (result.product_name) {
-                // If barcode fails, search by identified name
-                const found = cachedProducts.find(p => p.productName.toLowerCase().includes(result.product_name.toLowerCase()));
-                if (found) {
-                    stopScanner();
-                    setProduct(found);
-                    setStep('form');
-                    setErrors({});
-                } else {
-                    alert(`AI พบชื่อสินค้า "${result.product_name}" แต่ไม่มีในฐานข้อมูลคลังสินค้า`);
-                }
-            } else {
-                alert("AI ไม่พบรหัสบาร์โค้ดในภาพนี้ กรุณาขยับกล้องให้ชัดขึ้น");
+                applyProduct(foundByAiBarcode);
+                return;
             }
-            setIsAiProcessing(false);
-        }, 'image/jpeg', 0.8);
+        }
+
+        if (result.product_name) {
+            const detectedName = String(result.product_name).toLowerCase();
+            const foundByName = cachedProducts.find(p => 
+                p.productName.toLowerCase().includes(detectedName) || 
+                detectedName.includes(p.productName.toLowerCase())
+            );
+            if (foundByName) {
+                stopScanner();
+                applyProduct(foundByName);
+                return;
+            }
+        }
+        
+        setErrors({ scan: "AI ไม่พบข้อมูลสินค้าที่ตรงกับในคลัง กรุณาขยับกล้องหรือพิมพ์ค้นหาเอง" });
     } catch (e) {
-        setIsAiProcessing(false);
         console.error("AI Analysis failed", e);
+        setErrors({ scan: "การวิเคราะห์ด้วย AI ล้มเหลว กรุณาลองใหม่" });
+    } finally {
+        setIsAiProcessing(false);
     }
   };
 
-  const processBarcode = (code: string) => {
+  const applyProduct = (found: ProductMaster) => {
+    setProduct(found);
+    setSellingPrice(found.unitPrice?.toString() || '');
+    setStatus(QCStatus.PASS);
+    setReason('');
+    setImages([]);
+    setStep('form');
+    setErrors({});
+  };
+
+  const processBarcode = async (code: string) => {
     const cleanCode = String(code).trim();
+    if (!cleanCode) return;
+
     const found = cachedProducts.find(p => p.barcode.trim().toLowerCase() === cleanCode.toLowerCase());
+    
     if (found) {
-      setProduct(found);
-      setSellingPrice(found.unitPrice?.toString() || '');
-      setStatus(QCStatus.PASS);
-      setReason('');
-      setImages([]);
-      setStep('form');
-      setErrors({});
+      stopScanner();
+      applyProduct(found);
     } else {
-      setErrors({ scan: `ไม่พบรหัสบาร์โค้ด "${cleanCode}" ในคลังสินค้า (กรุณาเช็คว่า Import ข้อมูลแล้วหรือยัง)` });
-      setTimeout(() => setErrors({}), 5000);
+      // Fallback to AI Analysis automatically if scanner is active
+      if (showScanner) {
+        setErrors({ scan: "รหัสไม่พบในระบบ กำลังเรียกใช้ AI Vision ช่วยวิเคราะห์..." });
+        await analyzeWithAi();
+      } else {
+        setErrors({ scan: `ไม่พบรหัสบาร์โค้ด "${cleanCode}" ในคลังสินค้า` });
+        setTimeout(() => setErrors({}), 5000);
+      }
     }
   };
 
@@ -185,6 +205,22 @@ export const QCScreen: React.FC = () => {
 
   return (
     <div className="max-w-2xl mx-auto pb-24 px-4">
+      {/* AI Processing Overlay */}
+      {isAiProcessing && (
+        <div className="fixed inset-0 z-[150] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-2xl flex flex-col items-center gap-6 animate-slide-up">
+                <div className="relative">
+                    <Loader2 size={64} className="animate-spin text-pastel-blueDark" />
+                    <Cpu size={24} className="absolute inset-0 m-auto text-pastel-blueDark" />
+                </div>
+                <div className="text-center">
+                    <h3 className="text-lg font-bold text-gray-800 dark:text-white">AI Analyzing Image...</h3>
+                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest mt-1">กำลังใช้ AI ค้นหาสินค้าจากภาพ</p>
+                </div>
+            </div>
+        </div>
+      )}
+
       {step === 'scan' ? (
         <div className="flex flex-col items-center justify-center min-h-[75vh] gap-8 animate-fade-in py-8">
           <div className="relative p-14 bg-gradient-to-br from-pastel-blueDark to-blue-900 rounded-[4rem] shadow-2xl shadow-blue-500/40 text-white transition-transform hover:scale-105 duration-500">
@@ -215,12 +251,12 @@ export const QCScreen: React.FC = () => {
                   onClick={() => fetchMasterData(true).then(setCachedProducts)}
                   className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-pastel-blueDark transition-colors"
                 >
-                  <RefreshCw size={12} /> Refresh Cloud Data ({cachedProducts.length} items)
+                  <RefreshCw size={12} /> Sync Cloud ({cachedProducts.length} items)
                 </button>
             </div>
 
             {errors.scan && (
-              <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100 animate-shake">
+              <div className="bg-amber-50 dark:bg-amber-900/10 text-amber-700 dark:text-amber-400 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-amber-100 dark:border-amber-900/20 animate-slide-up">
                   <AlertCircle size={20} className="flex-shrink-0" />
                   <span>{errors.scan}</span>
               </div>
@@ -234,7 +270,7 @@ export const QCScreen: React.FC = () => {
                   <div className="max-w-[80%]">
                       <h2 className="text-xl font-bold leading-tight line-clamp-2">{product?.productName}</h2>
                       <div className="flex flex-wrap gap-2 mt-3">
-                        <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-lg text-[9px] font-black border border-blue-500/30 uppercase tracking-wider">RMS ID: {product?.barcode}</span>
+                        <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-lg text-[9px] font-black border border-blue-500/30 uppercase tracking-wider">ID: {product?.barcode}</span>
                       </div>
                   </div>
                   <button onClick={() => setStep('scan')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors"><X size={18}/></button>
@@ -242,7 +278,6 @@ export const QCScreen: React.FC = () => {
           </div>
 
           <div className="p-6 space-y-6">
-              {/* QC Status Selection */}
               <div className="grid grid-cols-2 gap-4">
                   <button onClick={() => setStatus(QCStatus.PASS)} className={`p-6 rounded-[2rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50/50 dark:bg-green-900/10 text-green-700 dark:text-green-400 shadow-lg scale-[1.02]' : 'border-gray-50 dark:border-gray-700 grayscale opacity-40 hover:grayscale-0'}`}>
                       <CheckCircle2 size={40} strokeWidth={1.5} />
@@ -254,7 +289,6 @@ export const QCScreen: React.FC = () => {
                   </button>
               </div>
 
-              {/* Selling Price */}
               <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-gray-400 ml-2 tracking-[0.2em]">ราคาขายหน้าสาขา <span className="text-red-500">*</span></label>
                   <div className="relative">
@@ -267,7 +301,6 @@ export const QCScreen: React.FC = () => {
                   </div>
               </div>
 
-              {/* Conditional Damage Details */}
               {(status === QCStatus.DAMAGE || (sellingPrice !== '' && parseFloat(sellingPrice) === 0)) && (
                   <div className="space-y-6 p-6 bg-gray-50 dark:bg-gray-900/50 rounded-[2.5rem] border border-gray-100 dark:border-gray-700 animate-slide-up">
                       <div className="space-y-2">
@@ -320,19 +353,18 @@ export const QCScreen: React.FC = () => {
         </div>
       )}
 
-      {/* Live Camera Scanner Overlay */}
       {showScanner && (
         <div className="fixed inset-0 z-[100] flex flex-col bg-black animate-fade-in">
           <div className="p-6 flex justify-between items-center text-white bg-gradient-to-b from-black/80 to-transparent">
-            <h3 className="font-bold flex items-center gap-3"><Scan size={24} className="text-pastel-blue" /> LIVE SCANNER</h3>
+            <h3 className="font-bold flex items-center gap-3 tracking-widest uppercase text-xs"><Scan size={20} className="text-pastel-blue" /> Smart QC Scanner</h3>
             <button onClick={stopScanner} className="p-3 bg-white/10 rounded-full active:scale-90 transition-all"><X size={24} /></button>
           </div>
           <div id="reader" className="flex-1 w-full bg-black relative">
              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                <div className="w-72 h-52 border-2 border-pastel-blue/40 rounded-[2.5rem] relative">
+                <div className="w-72 h-52 border-2 border-white/20 rounded-[2.5rem] relative">
                    <div className="absolute -top-1 -left-1 w-10 h-10 border-t-4 border-l-4 border-pastel-blue rounded-tl-3xl"></div>
                    <div className="absolute -top-1 -right-1 w-10 h-10 border-t-4 border-r-4 border-pastel-blue rounded-tr-3xl"></div>
-                   <div className="absolute top-1/2 left-4 right-4 h-0.5 bg-red-500/50 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.5)]"></div>
+                   <div className="absolute top-1/2 left-4 right-4 h-0.5 bg-pastel-blue/50 animate-pulse shadow-[0_0_15px_rgba(3,105,161,0.5)]"></div>
                 </div>
              </div>
           </div>
@@ -342,15 +374,14 @@ export const QCScreen: React.FC = () => {
                 disabled={isAiProcessing}
                 className="bg-white/10 hover:bg-white/20 text-white px-8 py-3.5 rounded-full flex items-center gap-3 transition-all border border-white/20 disabled:opacity-50 shadow-xl backdrop-blur-md"
             >
-                {isAiProcessing ? <Loader2 size={18} className="animate-spin" /> : <Cpu size={18} className="text-pastel-blue" />}
-                <span className="text-xs font-black uppercase tracking-[0.2em]">{isAiProcessing ? 'AI Analysing...' : 'AI VISION CAPTURE'}</span>
+                {isAiProcessing ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} className="text-pastel-blue" />}
+                <span className="text-xs font-black uppercase tracking-[0.2em]">{isAiProcessing ? 'AI Analysing...' : 'AI VISION SCAN'}</span>
             </button>
-            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">หันกล้องไปที่บาร์โค้ดแล้วกด AI Capture หากสแกนปกติไม่ติด</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center px-6 leading-relaxed">หากสแกนปกติไม่ติด หรือสินค้าไม่มีบาร์โค้ด <br/>กรุณากด AI Vision เพื่อค้นหาจากภาพสินค้า</p>
           </div>
         </div>
       )}
 
-      {/* Fullscreen Image Preview */}
       {previewImage && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 animate-fade-in">
             <div className="absolute inset-0 bg-black/95 backdrop-blur-md" onClick={() => setPreviewImage(null)} />
