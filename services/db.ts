@@ -61,24 +61,40 @@ export const setSupabaseConfig = (url: string, key: string) => {
 const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: any, query: string = '', countOnly = false) => {
     const { url, key } = getSupabaseConfig();
     const endpoint = `${url}/rest/v1/${table}${query}`;
+    
+    let prefer = 'return=representation';
+    if (countOnly) prefer = 'count=exact';
+    else if (method === 'POST') prefer = 'return=minimal';
+
     const headers: HeadersInit = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
         'Content-Type': 'application/json',
-        'Prefer': countOnly ? 'count=exact' : (method === 'POST' ? 'resolution=merge-duplicates, return=minimal' : 'return=representation')
+        'Prefer': prefer
     };
 
     const options: RequestInit = { method, headers, mode: 'cors' };
     if (body) options.body = JSON.stringify(body);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000); // เพิ่มเป็น 20s สำหรับรูปภาพ
+    const timeoutId = setTimeout(() => controller.abort(), 20000); 
     options.signal = controller.signal;
 
     try {
         const res = await fetch(endpoint, options);
         clearTimeout(timeoutId);
-        if (!res.ok) throw new Error(`Supabase Error ${res.status}`);
+        
+        if (!res.ok) {
+            const errorText = await res.text();
+            let errorMessage = `Supabase Error ${res.status}`;
+            try {
+                const errorJson = JSON.parse(errorText);
+                errorMessage = errorJson.message || errorJson.details || errorJson.hint || errorMessage;
+            } catch (e) {
+                errorMessage = errorText || errorMessage;
+            }
+            throw new Error(errorMessage);
+        }
 
         if (countOnly) {
             const range = res.headers.get('content-range');
@@ -89,7 +105,7 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         if (res.status === 204 || res.status === 201) return true;
         const responseText = await res.text();
         return responseText ? JSON.parse(responseText) : true;
-    } catch (err) {
+    } catch (err: any) {
         clearTimeout(timeoutId);
         throw err;
     }
@@ -107,22 +123,17 @@ export const fetchCloudStats = async () => {
             total: Number(totalProducts) 
         };
     } catch (e) {
-        console.error("Stats fetch failed", e);
         return { remaining: 0, checked: 0, total: 0 };
     }
 };
 
 export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
     const cached = await dbGet(KEYS.CACHE_MASTER);
-    
-    if (cached && !forceUpdate && cached.length > 0) {
-        return cached;
-    }
+    if (cached && !forceUpdate && cached.length > 0) return cached;
     
     try {
         const limit = 1000;
         const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}`);
-        
         if (Array.isArray(data)) {
             const mapped = data.map(item => ({
                 barcode: String(item.barcode || '').trim(),
@@ -132,13 +143,11 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
                 lotNo: item.lot_no || '',
                 productType: item.product_type || ''
             })).filter(p => p.barcode);
-
             await dbSet(KEYS.CACHE_MASTER, mapped);
             if (onProgress) onProgress(mapped.length, mapped.length);
             return mapped;
         }
     } catch (e) {
-        console.error("FetchMasterData Cloud failed:", e);
         if (cached) return cached;
     }
     return cached || [];
@@ -149,30 +158,33 @@ export const fetchMasterDataBatch = async (forceUpdate = false): Promise<Product
 };
 
 export const submitQCAndRemoveProduct = async (record: any) => {
-    // 1. บันทึก Log ก่อน
-    await callSupabase('qc_logs', 'POST', {
+    // เตรียม Payload ให้ตรงกับ Database Schema
+    const logPayload = {
         barcode: String(record.barcode).trim(),
         product_name: record.productName,
-        cost_price: record.costPrice,
-        selling_price: record.sellingPrice,
+        cost_price: Number(record.costPrice || 0),
+        selling_price: Number(record.sellingPrice || 0),
         status: record.status,
-        reason: record.reason,
-        remark: record.remark,
+        reason: record.reason || '',
+        remark: record.remark || '',
         inspector_id: record.inspectorId,
         image_urls: record.imageUrls || [],
-        lot_no: record.lotNo || '',
-        product_type: record.productType || '',
+        lot_no: String(record.lotNo || ''),
+        product_type: String(record.productType || ''),
         timestamp: new Date().toISOString()
-    });
+    };
+
+    // 1. บันทึก Log
+    await callSupabase('qc_logs', 'POST', logPayload);
     
-    // 2. พยายามลบจาก Cloud Products (ถ้าล้มเหลวไม่เป็นไร เพราะ Log บันทึกแล้ว)
+    // 2. ลบออกจากคลังสินค้า Cloud
     try {
         await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(record.barcode)}`);
     } catch (e) {
-        console.error("Delete from products failed but log saved", e);
+        console.warn("Delete cloud product failed, but log saved.");
     }
     
-    // 3. อัปเดต Local Cache ทันที
+    // 3. อัปเดต Cache ในเครื่อง
     const cached = await dbGet(KEYS.CACHE_MASTER);
     if (Array.isArray(cached)) {
         const filtered = cached.filter((p: any) => String(p.barcode).trim() !== String(record.barcode).trim());
@@ -234,8 +246,8 @@ export const saveProduct = async (p: ProductMaster) => {
         product_name: p.productName,
         cost_price: p.costPrice,
         unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
+        lot_no: p.lotNo || '',
+        product_type: p.productType || ''
     };
     await callSupabase('products', 'POST', payload);
     await fetchMasterData(true);

@@ -11,10 +11,18 @@ import {
   Database, Copy, Info, Terminal, HardDrive,
   ExternalLink, Lock, Unlock, Database as DbIcon, ShieldCheck,
   Monitor, Settings as SettingsIcon, AlertOctagon, MousePointer2, ChevronRight, Zap,
-  AlertTriangle, DatabaseZap
+  AlertTriangle, DatabaseZap, Box, Wrench
 } from 'lucide-react';
 
-const SUPABASE_SQL_SCRIPT = `-- 🚀 Supabase Setup Script for QC Master
+const REPAIR_SQL = `-- 🛠️ SQL สำหรับซ่อมแซมฐานข้อมูล (Database Repair)
+-- รันโค้ดด้านล่างนี้หากพบ Error: Could not find the 'lot_no' column
+
+ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS lot_no TEXT;
+ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS product_type TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS lot_no TEXT;
+ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT;`;
+
+const SUPABASE_SQL_SCRIPT = `-- 🚀 Supabase Setup Script for QC Master (Full)
 CREATE TABLE IF NOT EXISTS products (
     barcode TEXT PRIMARY KEY,
     product_name TEXT NOT NULL,
@@ -48,14 +56,10 @@ DROP POLICY IF EXISTS "Public Access Products" ON products;
 CREATE POLICY "Public Access Products" ON products FOR ALL TO anon USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Public Access QC Logs" ON qc_logs;
-CREATE POLICY "Public Access QC Logs" ON qc_logs FOR ALL TO anon USING (true) WITH CHECK (true);
-
--- 💡 TIPS: หากคุณสร้างตารางไปแล้ว ให้รันคำสั่งเหล่านี้เพื่อเพิ่มคอลัมน์ที่ขาดหายไป:
--- ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS lot_no TEXT;
--- ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS product_type TEXT;`;
+CREATE POLICY "Public Access QC Logs" ON qc_logs FOR ALL TO anon USING (true) WITH CHECK (true);`;
 
 export const Settings: React.FC = () => {
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const { isDark, toggleTheme } = useTheme();
   const initialConfig = getSupabaseConfig();
   const [url, setUrl] = useState(initialConfig.url);
@@ -87,4 +91,120 @@ export const Settings: React.FC = () => {
   return (
     <div className="space-y-6 pb-24 animate-fade-in max-w-5xl mx-auto">
       <div className="flex justify-between items-center px-2">
-        <h1 className="text-3xl font-display font-bold text-gray-800 dark:
+        <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white">ตั้งค่าระบบ</h1>
+        <button onClick={toggleTheme} className="p-3 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
+            {isDark ? <Sun className="text-yellow-500" /> : <Moon className="text-gray-400" />}
+        </button>
+      </div>
+
+      <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-2xl w-fit mb-4">
+          <button onClick={() => setActiveTab('config')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'config' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>Configuration</button>
+          <button onClick={() => setActiveTab('sql')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'sql' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>SQL Setup</button>
+      </div>
+
+      {activeTab === 'config' ? (
+        <div className="space-y-6">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
+                <div className="flex items-center gap-3 border-b border-gray-50 dark:border-gray-700 pb-4">
+                    <DatabaseZap size={24} className="text-pastel-blueDark" />
+                    <h2 className="text-xl font-bold text-gray-800 dark:text-white">Supabase Cloud Config</h2>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Supabase Project URL</label>
+                        <input 
+                            type="text" value={url} onChange={e => setUrl(e.target.value)} 
+                            className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark transition-all" 
+                            placeholder="https://your-project.supabase.co"
+                        />
+                    </div>
+                    <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Supabase Anon Key</label>
+                        <input 
+                            type="password" value={key} onChange={e => setKey(e.target.value)} 
+                            className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark transition-all" 
+                            placeholder="your-anon-public-key"
+                        />
+                    </div>
+                </div>
+
+                {testStatus.message && (
+                    <div className={`p-4 rounded-2xl flex items-center gap-3 text-xs font-bold border ${testStatus.status === 'success' ? 'bg-green-50 text-green-600 border-green-100' : testStatus.status === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}>
+                        {testStatus.status === 'loading' ? <RefreshCw className="animate-spin" size={16} /> : testStatus.status === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                        {testStatus.message}
+                    </div>
+                )}
+
+                <div className="flex gap-4">
+                    <button onClick={handleTestConnection} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 rounded-2xl text-sm font-bold active:scale-95 transition-all">ทดสอบการเชื่อมต่อ</button>
+                    <button onClick={handleSaveConfig} className="flex-1 py-4 bg-pastel-blueDark text-white rounded-2xl text-sm font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all">บันทึกการตั้งค่า</button>
+                </div>
+            </div>
+
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700">
+                <div className="flex items-center gap-3 mb-6">
+                    <Lock size={20} className="text-pastel-purpleDark" />
+                    <h2 className="text-xl font-bold text-gray-800 dark:text-white">User Account</h2>
+                </div>
+                <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl">
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-pastel-purple/50 rounded-xl flex items-center justify-center text-pastel-purpleDark font-black">{user?.username.charAt(0).toUpperCase()}</div>
+                        <div>
+                            <p className="font-bold text-gray-800 dark:text-white">{user?.username}</p>
+                            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{user?.role}</p>
+                        </div>
+                    </div>
+                    <button onClick={logout} className="p-3 bg-red-50 text-red-500 rounded-xl active:scale-90 transition-all"><LogOut size={20}/></button>
+                </div>
+            </div>
+        </div>
+      ) : (
+        <div className="space-y-8">
+            {/* Fix Database Section - High Priority */}
+            <div className="bg-gradient-to-br from-red-500 to-rose-600 p-8 rounded-[2.5rem] shadow-xl text-white space-y-4">
+                <div className="flex justify-between items-start">
+                    <div className="flex items-center gap-3">
+                        <Wrench size={32} />
+                        <div>
+                            <h2 className="text-xl font-bold">แก้ปัญหาบันทึกไม่ได้ (Error 400)</h2>
+                            <p className="text-xs text-red-100">สำหรับผู้ที่พบข้อผิดพลาด "Could not find column lot_no"</p>
+                        </div>
+                    </div>
+                    <button onClick={() => copy(REPAIR_SQL, 'คัดลอก SQL ซ่อมแซมแล้ว')} className="bg-white/20 hover:bg-white/30 p-4 rounded-2xl transition-all active:scale-90">
+                        <Copy size={20} />
+                    </button>
+                </div>
+                <div className="bg-black/20 p-4 rounded-2xl">
+                    <p className="text-[11px] font-mono leading-relaxed opacity-90">
+                        คัดลอก SQL ด้านล่างนี้ไปรันใน Supabase SQL Editor เพื่อซ่อมแซมคอลัมน์ที่ขาดหาย:
+                    </p>
+                    <pre className="mt-2 text-[10px] font-mono whitespace-pre-wrap bg-black/30 p-3 rounded-xl">
+                        {REPAIR_SQL}
+                    </pre>
+                </div>
+            </div>
+
+            {/* Standard SQL Setup */}
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
+                <div className="flex justify-between items-center border-b border-gray-50 dark:border-gray-700 pb-4">
+                    <div className="flex items-center gap-3">
+                        <Terminal size={24} className="text-pastel-greenDark" />
+                        <h2 className="text-xl font-bold text-gray-800 dark:text-white">Full SQL Setup</h2>
+                    </div>
+                    <button onClick={() => copy(SUPABASE_SQL_SCRIPT, 'คัดลอกสคริปต์เต็มแล้ว')} className="flex items-center gap-2 text-[10px] font-black text-pastel-blueDark uppercase tracking-widest bg-pastel-blue/50 px-4 py-2 rounded-xl active:scale-95 transition-all">
+                        <Copy size={14} /> Copy All
+                    </button>
+                </div>
+                
+                <div className="relative group">
+                    <pre className="bg-gray-900 text-green-400 p-6 rounded-3xl text-[11px] font-mono overflow-x-auto h-[300px] border-4 border-gray-800 custom-scrollbar">
+                        {SUPABASE_SQL_SCRIPT}
+                    </pre>
+                </div>
+            </div>
+        </div>
+      )}
+    </div>
+  );
+};
