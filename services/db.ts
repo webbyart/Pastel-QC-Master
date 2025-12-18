@@ -85,7 +85,7 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     return responseText ? JSON.parse(responseText) : true;
 };
 
-// ดึงตัวเลขสรุปจาก Cloud (Dynamic stats) โดยนับจากตาราง products (Inventory)
+// ดึงตัวเลขสรุปจาก Cloud นับจากตาราง products (Inventory/Production)
 export const fetchCloudStats = async () => {
     const [totalProducts, totalLogs] = await Promise.all([
         callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
@@ -96,17 +96,17 @@ export const fetchCloudStats = async () => {
     return { 
         remaining,
         checked,
-        total: remaining // จำนวนรวมนับจากตารางสินค้าที่ยังไม่ได้ตรวจ (Inventory/Production table)
+        total: remaining 
     };
 };
 
-// ดึงข้อมูลสินค้าแบบ Batch จำกัดที่ 500 รายการ เพื่อประสิทธิภาพ
+// ดึงข้อมูลสินค้าจำกัดสูงสุด 1000 รายการ เพื่อประสิทธิภาพ
 export const fetchMasterDataBatch = async (forceUpdate = false): Promise<ProductMaster[]> => {
     const cached = await dbGet(KEYS.CACHE_MASTER);
-    if (cached && !forceUpdate && cached.length > 0) return cached.slice(0, 500);
+    if (cached && !forceUpdate && cached.length > 0) return cached;
     
     try {
-        const limit = 500;
+        const limit = 1000;
         const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}`);
         if (Array.isArray(data)) {
             const mapped = data.map(item => ({
@@ -123,15 +123,18 @@ export const fetchMasterDataBatch = async (forceUpdate = false): Promise<Product
     } catch (e) {
         console.error("FetchBatch failed:", e);
     }
-    return cached ? cached.slice(0, 500) : [];
+    return cached || [];
 };
 
 export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
     const cached = await dbGet(KEYS.CACHE_MASTER);
-    if (cached && !forceUpdate) return cached;
+    if (cached && !forceUpdate && cached.length > 0) return cached;
     
     try {
-        const totalCount = await callSupabase('products', 'GET', null, '?select=barcode&limit=1', true) as number;
+        const totalCountRaw = await callSupabase('products', 'GET', null, '?select=barcode&limit=1', true) as number;
+        // จำกัดการดึงข้อมูลสูงสุด 1000 รายการตามคำขอ
+        const totalCount = Math.min(totalCountRaw, 1000);
+        
         let allData: any[] = [];
         let offset = 0;
         const limit = 500;
@@ -139,12 +142,13 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
         if (onProgress) onProgress(0, totalCount);
 
         while (offset < totalCount) {
-            const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}&offset=${offset}`);
+            const currentLimit = Math.min(limit, totalCount - offset);
+            const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${currentLimit}&offset=${offset}`);
             if (Array.isArray(data)) {
                 allData = [...allData, ...data];
                 offset += data.length;
                 if (onProgress) onProgress(offset, totalCount);
-                if (data.length < limit) break;
+                if (data.length < currentLimit || offset >= totalCount) break;
             } else {
                 break;
             }
@@ -181,13 +185,12 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         image_urls: record.imageUrls || [],
         timestamp: new Date().toISOString()
     });
-    // Remove from inventory once checked
     await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
 };
 
 export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     const cached = await dbGet(KEYS.CACHE_LOGS);
-    if (cached && !forceUpdate) return cached;
+    if (cached && !forceUpdate && cached.length > 0) return cached;
     try {
         const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=2000');
         if (Array.isArray(data)) {

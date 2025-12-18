@@ -1,8 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
-import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, updateLocalMasterDataCache, fetchCloudStats } from '../services/db';
+import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats } from '../services/db';
 import { ProductMaster } from '../types';
-import { Trash2, Search, Plus, Edit2, X, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, Cpu } from 'lucide-react';
+import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
@@ -22,7 +22,8 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => { 
-    loadSessionData(true); 
+    // ดึงข้อมูลจาก Cache ถ้ามีอยู่แล้ว ไม่ต้องโหลดซ้ำทุกครั้งที่เข้าเมนู
+    loadSessionData(false); 
   }, []);
 
   const loadSessionData = async (forceUpdate = false) => {
@@ -31,7 +32,7 @@ export const MasterData: React.FC = () => {
         const [stats, data] = await Promise.all([
             fetchCloudStats(),
             fetchMasterData(forceUpdate, (current, total) => {
-                const pct = Math.floor((current / total) * 100);
+                const pct = Math.floor((current / (total || 1)) * 100);
                 setProgressPct(pct);
                 setProcessLabel(`Syncing: ${current.toLocaleString()} / ${total.toLocaleString()}`);
             })
@@ -80,7 +81,7 @@ export const MasterData: React.FC = () => {
       if (!confirm(`ต้องการซิงค์สินค้า ${products.length.toLocaleString()} รายการปัจจุบันขึ้น Cloud หรือไม่?`)) return;
       
       setIsProcessing(true);
-      setProcessLabel('Syncing Batch to Cloud (500/Round)...');
+      setProcessLabel('Syncing Batch to Cloud...');
       setProgressPct(0);
       
       try {
@@ -169,14 +170,14 @@ export const MasterData: React.FC = () => {
                   </div>
                   <div className="space-y-2">
                       <h3 className="text-lg font-bold text-gray-800 dark:text-white leading-tight">{processLabel}</h3>
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em] animate-pulse">Dynamic Batch Loading (500 items/round)</p>
+                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em] animate-pulse">Max Load Limit: 1,000 Items</p>
                   </div>
               </div>
           </div>
       )}
 
       {/* System Health / Live Stats Header */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
             <div className="p-4 bg-pastel-blue/50 dark:bg-gray-700 rounded-3xl text-pastel-blueDark">
                 <Database size={24} />
@@ -184,15 +185,6 @@ export const MasterData: React.FC = () => {
             <div>
                 <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">คลังสินค้า (Cloud)</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()} <span className="text-xs font-normal text-gray-400">Items</span></p>
-            </div>
-        </div>
-        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
-            <div className="p-4 bg-pastel-green/50 dark:bg-gray-700 rounded-3xl text-pastel-greenDark">
-                <Cpu size={24} />
-            </div>
-            <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Batch System</p>
-                <p className="text-2xl font-black text-gray-800 dark:text-white">500 <span className="text-xs font-normal text-gray-400">Total system</span></p>
             </div>
         </div>
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
@@ -247,7 +239,7 @@ export const MasterData: React.FC = () => {
         <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
             <input 
-              type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
+              type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า (แสดงผล 1,000 รายการแรก)..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
               className="w-full pl-12 pr-4 py-4 bg-gray-50 dark:bg-gray-900 border-none focus:ring-2 focus:ring-pastel-blueDark rounded-[1.5rem] text-sm font-medium transition-all" 
             />
         </div>
@@ -256,7 +248,7 @@ export const MasterData: React.FC = () => {
       {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400 space-y-4">
               <Loader2 size={32} className="animate-spin text-pastel-blueDark" />
-              <p className="text-xs font-bold uppercase tracking-widest text-center">Batch Processing: {progressPct}%</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-center">Loading Cloud Master: {progressPct}%</p>
           </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">

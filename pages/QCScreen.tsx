@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterDataBatch, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache, fetchCloudStats } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Box, ClipboardCheck, Timer, RefreshCw, Server, Database } from 'lucide-react';
+import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Timer, RefreshCw, Database, ClipboardCheck } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { GoogleGenAI } from "@google/genai";
 
@@ -43,7 +43,8 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    initData();
+    // ดึงจาก Cache ถ้ามีอยู่แล้ว ไม่ต้องโหลดซ้ำทุกครั้งที่เข้าหน้าตรวจ
+    initData(false);
   }, []);
 
   const initData = async (force = false) => {
@@ -52,7 +53,7 @@ export const QCScreen: React.FC = () => {
         const stats = await fetchCloudStats();
         setCloudStats(stats);
         
-        // ดึงข้อมูลสินค้าเพียง 500 รายการสำหรับระบบตรวจเช็ค เพื่อลดความช้า
+        // ดึงข้อมูลสินค้าสูงสุด 1000 รายการสำหรับระบบตรวจเช็ค
         const data = await fetchMasterDataBatch(force);
         setCachedProducts(data);
     } catch (e) {
@@ -135,7 +136,7 @@ export const QCScreen: React.FC = () => {
       setStep('form');
       setErrors({});
     } else {
-      setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคิว 500 รายการนี้` });
+      setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคิวสินค้าปัจจุบัน` });
     }
   };
 
@@ -167,7 +168,7 @@ export const QCScreen: React.FC = () => {
         setBarcode('');
         setProduct(null);
         
-        // ถ้าคิวใกล้หมด ให้โหลด Batch ใหม่มาเติมอัตโนมัติ
+        // ถ้าคิวใกล้หมด ให้โหลดใหม่มาเติมอัตโนมัติ
         if (updatedList.length < 5) {
             initData(true);
         }
@@ -179,14 +180,14 @@ export const QCScreen: React.FC = () => {
   return (
     <div className="max-w-4xl mx-auto pb-24 px-4 animate-fade-in space-y-8">
       
-      {/* Batch Loading Overlay */}
+      {/* Syncing Overlay */}
       {isSyncing && (
           <div className="fixed inset-0 z-[300] bg-white/95 dark:bg-gray-900/95 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center animate-fade-in">
               <div className="bg-white dark:bg-gray-800 p-12 rounded-[4rem] shadow-2xl border border-gray-100 dark:border-gray-700 flex flex-col items-center gap-8 max-w-sm w-full animate-slide-up">
                   <div className="w-24 h-24 rounded-full border-4 border-gray-100 dark:border-gray-700 border-t-pastel-blueDark animate-spin" />
                   <div className="space-y-2">
-                      <h3 className="text-2xl font-black text-gray-800 dark:text-white uppercase">Syncing Batch</h3>
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">กำลังดึงสินค้า 500 รายการล่าสุด...</p>
+                      <h3 className="text-2xl font-black text-gray-800 dark:text-white uppercase">Syncing Cloud</h3>
+                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">กำลังดึงข้อมูลสินค้า (สูงสุด 1,000 รายการ)...</p>
                   </div>
               </div>
           </div>
@@ -206,12 +207,12 @@ export const QCScreen: React.FC = () => {
                   </div>
               </div>
               <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-6 group transition-all hover:shadow-xl hover:-translate-y-1">
-                  <div className="p-5 bg-purple-50 dark:bg-purple-900/30 rounded-[2rem] text-purple-500 group-hover:scale-110 transition-transform">
-                      <Box size={28} />
+                  <div className="p-5 bg-green-50 dark:bg-green-900/30 rounded-[2rem] text-green-500 group-hover:scale-110 transition-transform">
+                      <ClipboardCheck size={28} />
                   </div>
                   <div>
-                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">Batch System</p>
-                      <p className="text-3xl font-black text-gray-800 dark:text-white">500 <span className="text-xs font-normal text-gray-400">Items/Batch</span></p>
+                      <p className="text-[11px] font-black text-gray-400 uppercase tracking-widest mb-1">ตรวจแล้ว</p>
+                      <p className="text-3xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()} <span className="text-xs font-normal text-gray-400">Checked</span></p>
                   </div>
               </div>
               <div className="bg-pastel-blueDark p-8 rounded-[3rem] shadow-2xl shadow-blue-500/20 flex items-center gap-6 group transition-all hover:-translate-y-1 text-white">
@@ -235,7 +236,7 @@ export const QCScreen: React.FC = () => {
                 <h2 className="text-4xl font-display font-bold text-gray-800 dark:text-white tracking-tight">QC MASTER PROCESS</h2>
                 <div className="flex items-center justify-center gap-4">
                     <div className="h-[2px] w-12 bg-gray-100 dark:bg-gray-700" />
-                    <p className="text-[12px] text-gray-400 font-black uppercase tracking-[0.4em]">500 Items Batch Logic</p>
+                    <p className="text-[12px] text-gray-400 font-black uppercase tracking-[0.4em]">Cloud Inventory Sync (1,000 Items)</p>
                     <div className="h-[2px] w-12 bg-gray-100 dark:bg-gray-700" />
                 </div>
             </div>
