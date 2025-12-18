@@ -11,7 +11,6 @@ const KEYS = {
   CACHE_LOGS: 'qc_cache_logs',
 };
 
-// Default credentials for immediate connection
 const DEFAULT_SUPABASE_URL = 'https://qxqcimcauwvrwafltzfg.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4cWNpbWNhdXd2cndhZmx0emZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMDcxMjYsImV4cCI6MjA4MTU4MzEyNn0.N_EJbZNHnL0HL5luJOo0QJJruV_U47RNOr0qdzM-pno';
 
@@ -59,14 +58,11 @@ export const setSupabaseConfig = (url: string, key: string) => {
     localStorage.setItem(KEYS.SUPABASE_KEY, key.trim());
 };
 
-export const getApiUrl = (): string => getSupabaseConfig().url;
-
 const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: any, query: string = '') => {
     const { url, key } = getSupabaseConfig();
     if (!url || !key) throw new Error("Missing Supabase configuration.");
 
     const endpoint = `${url}/rest/v1/${table}${query}`;
-    
     const headers: HeadersInit = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
@@ -79,7 +75,6 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         if (body) options.body = JSON.stringify(body);
 
         const res = await fetch(endpoint, options);
-        
         if (!res.ok) {
             const errText = await res.text();
             let errData: any = {};
@@ -87,18 +82,11 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
             throw new Error(errData.message || `Supabase Error ${res.status}`);
         }
         
-        // CRITICAL FIX: Handle 201 Created and 204 No Content (Empty Response)
-        if (res.status === 204 || res.status === 201) {
-            const text = await res.text();
-            if (!text) return true;
-            try { return JSON.parse(text); } catch(e) { return true; }
-        }
-        
+        if (res.status === 204 || res.status === 201) return true;
         const responseText = await res.text();
-        if (!responseText) return true;
-        return JSON.parse(responseText);
+        return responseText ? JSON.parse(responseText) : true;
     } catch (e: any) {
-        console.error(`Supabase call failed [${table}]:`, e);
+        console.error(`Supabase failure [${table}]:`, e);
         throw e;
     }
 };
@@ -129,7 +117,7 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
         const data = await callSupabase('products', 'GET', null, '?select=*&order=barcode.asc');
         if (Array.isArray(data)) {
             const mapped = data.map(item => ({
-                barcode: item.barcode,
+                barcode: String(item.barcode).trim(),
                 productName: item.product_name,
                 costPrice: Number(item.cost_price),
                 unitPrice: Number(item.unit_price),
@@ -143,9 +131,24 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
     return cached || [];
 };
 
+export const bulkSaveProducts = async (products: ProductMaster[]) => {
+    // Ensuring column names match Supabase table schema
+    const payloads = products.map(p => ({
+        barcode: String(p.barcode).trim(),
+        product_name: p.productName,
+        cost_price: p.costPrice,
+        unit_price: p.unitPrice || 0,
+        lot_no: p.lotNo || '',
+        product_type: p.productType || ''
+    }));
+    await callSupabase('products', 'POST', payloads);
+    await dbSet(KEYS.CACHE_MASTER, products);
+    return true;
+};
+
 export const saveQCRecord = async (record: any) => {
     const payload = {
-        barcode: record.barcode,
+        barcode: String(record.barcode).trim(),
         product_name: record.productName,
         cost_price: record.costPrice,
         selling_price: record.sellingPrice,
@@ -185,7 +188,7 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     return cached || [];
 };
 
-export const compressImage = (file: File): Promise<string> => {
+export const compressImage = (file: File | Blob): Promise<string> => {
     return new Promise((resolve) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
@@ -194,11 +197,14 @@ export const compressImage = (file: File): Promise<string> => {
             img.src = e.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 800; 
+                const MAX_WIDTH = 1000; 
                 canvas.width = MAX_WIDTH;
                 canvas.height = img.height * (MAX_WIDTH / img.width);
-                canvas.getContext('2d')?.drawImage(img, 0, 0, canvas.width, canvas.height);
-                resolve(canvas.toDataURL('image/jpeg', 0.6));
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.75));
+                }
             }
         }
     });
@@ -230,23 +236,9 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
     });
 };
 
-export const bulkSaveProducts = async (products: ProductMaster[]) => {
-    const payloads = products.map(p => ({
-        barcode: p.barcode,
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
-    }));
-    await callSupabase('products', 'POST', payloads);
-    await dbSet(KEYS.CACHE_MASTER, products);
-    return true;
-};
-
 export const saveProduct = async (p: ProductMaster) => {
     const payload = {
-        barcode: p.barcode,
+        barcode: String(p.barcode).trim(),
         product_name: p.productName,
         cost_price: p.costPrice,
         unit_price: p.unitPrice,
@@ -258,10 +250,23 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
 export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
-export const clearRemoteMasterData = async () => callSupabase('products', 'DELETE', null, `?barcode=neq.CLEAR_ALL_TEMP`);
 export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
-export const getDataSource = () => DataSourceType.SUPABASE;
-export const setDataSource = (t: DataSourceType) => {};
+
+// Fix: Implement getDataSource to read from localStorage with fallback
+export const getDataSource = (): DataSourceType => {
+  const stored = localStorage.getItem(KEYS.DATA_SOURCE);
+  if (stored === DataSourceType.GOOGLE_SHEETS || stored === DataSourceType.MYSQL_BRIDGE || stored === DataSourceType.SUPABASE) {
+    return stored as DataSourceType;
+  }
+  return DataSourceType.SUPABASE;
+};
+
+// Fix: Add missing setDataSource export to resolve error in pages/Settings.tsx
+export const setDataSource = (type: DataSourceType) => {
+  localStorage.setItem(KEYS.DATA_SOURCE, type);
+};
+
+export const getApiUrl = (): string => getSupabaseConfig().url;
 
 export const exportQCLogs = async () => {
     const logs = await fetchQCLogs(false);
