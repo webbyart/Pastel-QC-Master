@@ -49,13 +49,6 @@ export const dbDel = async (key: string) => {
     tx.objectStore(STORE_NAME).delete(key);
 };
 
-export const getDataSource = (): DataSourceType => {
-    const stored = localStorage.getItem(KEYS.DATA_SOURCE);
-    return (stored as DataSourceType) || DataSourceType.SUPABASE;
-};
-
-export const setDataSource = (type: DataSourceType) => localStorage.setItem(KEYS.DATA_SOURCE, type);
-
 export const getSupabaseConfig = () => ({
     url: (localStorage.getItem(KEYS.SUPABASE_URL) || DEFAULT_SUPABASE_URL).trim(),
     key: (localStorage.getItem(KEYS.SUPABASE_KEY) || DEFAULT_SUPABASE_KEY).trim()
@@ -67,47 +60,6 @@ export const setSupabaseConfig = (url: string, key: string) => {
 };
 
 export const getApiUrl = (): string => getSupabaseConfig().url;
-
-/**
- * Validates Supabase connection and checks for required tables.
- */
-export const testApiConnection = async (url: string, key: string): Promise<{success: boolean, message?: string, error?: string}> => {
-    try {
-        const endpoint = `${url}/rest/v1/products?select=barcode&limit=1`;
-        const headers: HeadersInit = {
-            'apikey': key,
-            'Authorization': `Bearer ${key}`,
-            'Content-Type': 'application/json'
-        };
-        const res = await fetch(endpoint, { method: 'GET', headers });
-        
-        if (!res.ok) {
-            const errText = await res.text();
-            if (res.status === 404 || errText.includes("Could not find the table") || errText.includes("schema cache")) {
-                return { success: false, error: "CONNECTED_BUT_TABLES_MISSING" };
-            }
-            return { success: false, error: errText || `Error ${res.status}` };
-        }
-        return { success: true, message: "Connected successfully!" };
-    } catch (e: any) {
-        return { success: false, error: e.message };
-    }
-};
-
-/**
- * Handles user login logic.
- */
-export const loginUser = (username: string): User | null => {
-  const normalized = username.toLowerCase().trim();
-  if (normalized === 'admin' || normalized === 'user') {
-    return {
-      id: normalized === 'admin' ? '1' : '2',
-      username: normalized,
-      role: normalized === 'admin' ? 'admin' : 'user'
-    };
-  }
-  return null;
-};
 
 const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: any, query: string = '') => {
     const { url, key } = getSupabaseConfig();
@@ -132,18 +84,10 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
             const errText = await res.text();
             let errData: any = {};
             try { errData = JSON.parse(errText); } catch(e) {}
-            
-            let msg = errData.message || `Supabase Error ${res.status}`;
-            
-            if (msg.includes("Could not find the table") || msg.includes("schema cache")) {
-                const error: any = new Error(`TABLE_NOT_FOUND:${table}`);
-                error.tableName = table;
-                throw error;
-            }
-            throw new Error(msg);
+            throw new Error(errData.message || `Supabase Error ${res.status}`);
         }
         
-        // Fix: Properly handle 201 Created or 204 No Content (Empty Responses)
+        // CRITICAL FIX: Handle 201 Created and 204 No Content (Empty Response)
         if (res.status === 204 || res.status === 201) {
             const text = await res.text();
             if (!text) return true;
@@ -152,23 +96,30 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         
         const responseText = await res.text();
         if (!responseText) return true;
-        
-        try {
-            return JSON.parse(responseText);
-        } catch (jsonErr) {
-            console.warn("Response was not JSON but request was successful:", responseText);
-            return true;
-        }
+        return JSON.parse(responseText);
     } catch (e: any) {
         console.error(`Supabase call failed [${table}]:`, e);
-        if (e.message.startsWith('TABLE_NOT_FOUND')) throw e;
-        if (e.message.includes('fetch')) {
-            const err: any = new Error("MIXED_CONTENT_BLOCKED");
-            err.isMixedContent = true;
-            throw err;
-        }
         throw e;
     }
+};
+
+export const testApiConnection = async (url: string, key: string) => {
+    try {
+        const res = await fetch(`${url}/rest/v1/products?select=barcode&limit=1`, {
+            method: 'GET',
+            headers: { 'apikey': key, 'Authorization': `Bearer ${key}` }
+        });
+        return { success: res.ok, message: res.ok ? "Connected!" : "Connection failed" };
+    } catch (e: any) {
+        return { success: false, error: e.message };
+    }
+};
+
+export const loginUser = (username: string): User | null => {
+  const u = username.toLowerCase().trim();
+  if (u === 'admin') return { id: '1', username: 'admin', role: 'admin' };
+  if (u === 'user') return { id: '2', username: 'user', role: 'user' };
+  return null;
 };
 
 export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaster[]> => {
@@ -188,9 +139,7 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
             await dbSet(KEYS.CACHE_MASTER, mapped);
             return mapped;
         }
-    } catch (e: any) {
-        if (e.message?.includes('TABLE_NOT_FOUND')) throw e;
-    }
+    } catch (e) {}
     return cached || [];
 };
 
@@ -232,9 +181,7 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
             await dbSet(KEYS.CACHE_LOGS, mapped);
             return mapped;
         }
-    } catch (e: any) {
-        if (forceUpdate) throw e; 
-    }
+    } catch (e) {}
     return cached || [];
 };
 
@@ -264,11 +211,10 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
             try {
                 const data = e.target?.result;
                 const workbook = XLSX.read(data, { type: 'binary' });
-                const sheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[sheetName];
+                const worksheet = workbook.Sheets[workbook.SheetNames[0]];
                 const json = XLSX.utils.sheet_to_json(worksheet) as any[];
 
-                const mappedProducts: ProductMaster[] = json.map(row => ({
+                const mapped: ProductMaster[] = json.map(row => ({
                     barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || '').trim(),
                     productName: String(row['Product Name'] || row['ProductName'] || row['name'] || '').trim(),
                     costPrice: Number(row['Cost Price'] || row['Cost'] || row['cost'] || 0),
@@ -277,30 +223,13 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
                     productType: String(row['Type'] || row['type'] || ''),
                 })).filter(p => p.barcode && p.productName);
 
-                dbSet(KEYS.CACHE_MASTER, mappedProducts);
-                resolve(mappedProducts);
-            } catch (err) {
-                reject(err);
-            }
+                resolve(mapped);
+            } catch (err) { reject(err); }
         };
-        reader.onerror = (err) => reject(err);
         reader.readAsBinaryString(file);
     });
 };
 
-export const saveProduct = async (p: ProductMaster) => {
-    const payload = {
-        barcode: p.barcode,
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
-    };
-    return await callSupabase('products', 'POST', payload);
-};
-
-// Fixed bulkSaveProducts to use correct ProductMaster property names
 export const bulkSaveProducts = async (products: ProductMaster[]) => {
     const payloads = products.map(p => ({
         barcode: p.barcode,
@@ -315,33 +244,31 @@ export const bulkSaveProducts = async (products: ProductMaster[]) => {
     return true;
 };
 
-export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
-
-// Added missing clearRemoteMasterData function
-export const clearRemoteMasterData = async () => {
-    return await callSupabase('products', 'DELETE', null, '?barcode=neq.EMPTY_VAL_888');
+export const saveProduct = async (p: ProductMaster) => {
+    const payload = {
+        barcode: p.barcode,
+        product_name: p.productName,
+        cost_price: p.costPrice,
+        unit_price: p.unitPrice,
+        lot_no: p.lotNo,
+        product_type: p.productType
+    };
+    return await callSupabase('products', 'POST', payload);
 };
 
-export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
 export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
+export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
+export const clearRemoteMasterData = async () => callSupabase('products', 'DELETE', null, `?barcode=neq.CLEAR_ALL_TEMP`);
+export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
+export const getDataSource = () => DataSourceType.SUPABASE;
+export const setDataSource = (t: DataSourceType) => {};
 
 export const exportQCLogs = async () => {
     const logs = await fetchQCLogs(false);
     if (logs.length === 0) return;
-    const data = logs.map(l => ({
-        'Date/Time': new Date(l.timestamp).toLocaleString('th-TH'),
-        'Barcode': l.barcode,
-        'Product Name': l.productName,
-        'Status': l.status,
-        'Reason': l.reason,
-        'Cost Price': l.costPrice,
-        'Selling Price': l.sellingPrice,
-        'Inspector': l.inspectorId,
-        'Remark': l.remark || ''
-    }));
-    const worksheet = XLSX.utils.json_to_sheet(data);
+    const worksheet = XLSX.utils.json_to_sheet(logs);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "QC_Reports");
+    XLSX.utils.book_append_sheet(workbook, worksheet, "QC_Report");
     XLSX.writeFile(workbook, `QC_Report_${new Date().toISOString().split('T')[0]}.xlsx`);
 };
 
@@ -350,7 +277,7 @@ export const exportMasterData = async () => {
     if (products.length === 0) return false;
     const worksheet = XLSX.utils.json_to_sheet(products);
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "MasterData");
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Inventory");
     XLSX.writeFile(workbook, "MasterData_Export.xlsx");
     return true;
 };
