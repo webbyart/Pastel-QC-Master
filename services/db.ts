@@ -72,7 +72,7 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     if (body) options.body = JSON.stringify(body);
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for mobile
+    const timeoutId = setTimeout(() => controller.abort(), 20000); // เพิ่มเป็น 20s สำหรับรูปภาพ
     options.signal = controller.signal;
 
     try {
@@ -115,7 +115,6 @@ export const fetchCloudStats = async () => {
 export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
     const cached = await dbGet(KEYS.CACHE_MASTER);
     
-    // ถ้ามีข้อมูลในเครื่องแล้ว และไม่ใช่การบังคับอัปเดต ให้คืนค่าทันที
     if (cached && !forceUpdate && cached.length > 0) {
         return cached;
     }
@@ -140,7 +139,6 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
         }
     } catch (e) {
         console.error("FetchMasterData Cloud failed:", e);
-        // ถ้าดึงจาก Cloud ไม่ได้ ให้ใช้ Cache เท่าที่มี
         if (cached) return cached;
     }
     return cached || [];
@@ -151,6 +149,7 @@ export const fetchMasterDataBatch = async (forceUpdate = false): Promise<Product
 };
 
 export const submitQCAndRemoveProduct = async (record: any) => {
+    // 1. บันทึก Log ก่อน
     await callSupabase('qc_logs', 'POST', {
         barcode: String(record.barcode).trim(),
         product_name: record.productName,
@@ -166,15 +165,17 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         timestamp: new Date().toISOString()
     });
     
+    // 2. พยายามลบจาก Cloud Products (ถ้าล้มเหลวไม่เป็นไร เพราะ Log บันทึกแล้ว)
     try {
-        await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
+        await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(record.barcode)}`);
     } catch (e) {
         console.error("Delete from products failed but log saved", e);
     }
     
+    // 3. อัปเดต Local Cache ทันที
     const cached = await dbGet(KEYS.CACHE_MASTER);
     if (Array.isArray(cached)) {
-        const filtered = cached.filter((p: any) => p.barcode !== record.barcode);
+        const filtered = cached.filter((p: any) => String(p.barcode).trim() !== String(record.barcode).trim());
         await dbSet(KEYS.CACHE_MASTER, filtered);
     }
 };
@@ -242,7 +243,7 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     if (!products.length) return;
-    const CHUNK_SIZE = 50; // ขนาดเล็กลงสำหรับมือถือ
+    const CHUNK_SIZE = 50; 
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
         const chunk = products.slice(i, i + CHUNK_SIZE);
         const payloads = chunk.map(p => ({
@@ -260,7 +261,7 @@ export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (
 };
 
 export const deleteProduct = async (barcode: string) => {
-    await callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
+    await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(barcode)}`);
     await fetchMasterData(true);
 };
 
@@ -280,7 +281,7 @@ export const compressImage = (file: File | Blob): Promise<string> => {
             img.src = e.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 600; // เล็กลงเพื่อความเร็ว
+                const MAX_WIDTH = 600; 
                 canvas.width = MAX_WIDTH;
                 canvas.height = img.height * (MAX_WIDTH / img.width);
                 const ctx = canvas.getContext('2d');

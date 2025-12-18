@@ -36,6 +36,8 @@ CREATE TABLE IF NOT EXISTS qc_logs (
     remark TEXT,
     inspector_id TEXT,
     image_urls JSONB DEFAULT '[]'::jsonb,
+    lot_no TEXT,
+    product_type TEXT,
     timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -46,7 +48,11 @@ DROP POLICY IF EXISTS "Public Access Products" ON products;
 CREATE POLICY "Public Access Products" ON products FOR ALL TO anon USING (true) WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Public Access QC Logs" ON qc_logs;
-CREATE POLICY "Public Access QC Logs" ON qc_logs FOR ALL TO anon USING (true) WITH CHECK (true);`;
+CREATE POLICY "Public Access QC Logs" ON qc_logs FOR ALL TO anon USING (true) WITH CHECK (true);
+
+-- 💡 TIPS: หากคุณสร้างตารางไปแล้ว ให้รันคำสั่งเหล่านี้เพื่อเพิ่มคอลัมน์ที่ขาดหายไป:
+-- ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS lot_no TEXT;
+-- ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS product_type TEXT;`;
 
 export const Settings: React.FC = () => {
   const { logout } = useAuth();
@@ -81,82 +87,4 @@ export const Settings: React.FC = () => {
   return (
     <div className="space-y-6 pb-24 animate-fade-in max-w-5xl mx-auto">
       <div className="flex justify-between items-center px-2">
-        <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-3">
-            <SettingsIcon className="text-pastel-blueDark" />
-            ตั้งค่าระบบ
-        </h1>
-        <button onClick={logout} className="p-3 bg-red-50 text-red-500 rounded-2xl hover:bg-red-100 transition-colors">
-            <LogOut size={20} />
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-1 space-y-4">
-            <div className="bg-white dark:bg-gray-800 p-6 rounded-[2rem] shadow-sm border border-gray-100 dark:border-gray-700">
-                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">ระบบปฏิบัติการ</h3>
-                <div className="space-y-2">
-                    <div className="w-full p-4 rounded-2xl flex items-center gap-3 bg-pastel-blueDark text-white shadow-lg">
-                        <Zap size={18} /> <span className="text-sm font-bold">Supabase Cloud Only</span>
-                    </div>
-                </div>
-            </div>
-            <button onClick={toggleTheme} className="w-full p-6 bg-white dark:bg-gray-800 rounded-[2rem] flex items-center justify-between shadow-sm border border-gray-100 dark:border-gray-700 transition-all active:scale-95">
-                <span className="text-sm font-bold dark:text-white">Dark Mode</span>
-                {isDark ? <Moon className="text-purple-400" /> : <Sun className="text-orange-400" />}
-            </button>
-        </div>
-
-        <div className="lg:col-span-3 space-y-4">
-            <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-xl border border-gray-100 dark:border-gray-700 overflow-hidden">
-                <div className="flex bg-gray-50 dark:bg-gray-900/50 p-2 m-4 rounded-2xl gap-2">
-                    <button onClick={() => setActiveTab('config')} className={`flex-1 px-6 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'config' ? 'bg-white dark:bg-gray-800 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>1. ตั้งค่าการเชื่อมต่อ</button>
-                    <button onClick={() => setActiveTab('sql')} className={`flex-1 px-6 py-3 rounded-xl text-xs font-bold transition-all ${activeTab === 'sql' ? 'bg-white dark:bg-gray-800 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>2. SQL Editor</button>
-                </div>
-
-                <div className="p-8 pt-4">
-                    {activeTab === 'config' && (
-                        <div className="space-y-6">
-                            <div className="space-y-4">
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">Project URL</label>
-                                    <input type="text" value={url} onChange={(e) => setUrl(e.target.value)} className="w-full p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl font-mono text-xs outline-none border-2 border-transparent focus:border-pastel-blueDark" placeholder="https://your-project.supabase.co" />
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-gray-500 uppercase ml-1">API Key (Anon)</label>
-                                    <textarea value={key} onChange={(e) => setKey(e.target.value)} className="w-full p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl font-mono text-[10px] outline-none border-2 border-transparent focus:border-pastel-blueDark h-24 resize-none" placeholder="eyJhbGciOiJIUzI1Ni..." />
-                                </div>
-                                <div className="flex gap-3">
-                                    <button onClick={handleSaveConfig} className="flex-1 bg-pastel-blueDark text-white py-4 rounded-2xl font-bold transition-all active:scale-95">บันทึก</button>
-                                    <button onClick={handleTestConnection} disabled={testStatus.status === 'loading'} className="flex-1 bg-gray-800 text-white py-4 rounded-2xl font-bold flex items-center justify-center gap-2 hover:bg-black transition-all">
-                                        {testStatus.status === 'loading' ? <RefreshCw className="animate-spin" /> : <Play size={18} />} ทดสอบ
-                                    </button>
-                                </div>
-                            </div>
-                            
-                            {testStatus.status !== 'idle' && (
-                                <div className={`p-5 rounded-3xl flex items-center gap-3 animate-slide-up ${testStatus.status === 'success' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
-                                    {testStatus.status === 'success' ? <CheckCircle size={20} /> : <AlertCircle size={20} />}
-                                    <span className="text-sm font-bold">{testStatus.message}</span>
-                                </div>
-                            )}
-                        </div>
-                    )}
-
-                    {activeTab === 'sql' && (
-                        <div className="space-y-4 animate-fade-in">
-                            <div className="flex items-center gap-3 p-4 bg-amber-50 text-amber-800 rounded-2xl text-[10px] font-bold border border-amber-100">
-                                <DatabaseZap size={16} /> <span>คัดลอกโค้ดไปวางที่ <b>SQL Editor</b> บน Supabase แล้วกด <b>Run</b> เพื่อเตรียมฐานข้อมูล</span>
-                            </div>
-                            <div className="relative">
-                                <pre className="bg-gray-900 text-green-400 p-6 rounded-2xl text-[9px] font-mono overflow-auto max-h-80 leading-relaxed">{SUPABASE_SQL_SCRIPT}</pre>
-                                <button onClick={() => copy(SUPABASE_SQL_SCRIPT, 'SQL Copied!')} className="absolute top-4 right-4 p-3 bg-white/10 rounded-xl text-white hover:bg-white/20 active:scale-90 transition-all"><Copy size={18}/></button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-      </div>
-    </div>
-  );
-};
+        <h1 className="text-3xl font-display font-bold text-gray-800 dark:

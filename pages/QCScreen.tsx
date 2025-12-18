@@ -43,7 +43,6 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    // โหลดครั้งเดียวตอนเข้าหน้าจอ ถ้ามี Cache จะแสดงทันที ข้อมูลไม่หายเมื่อสลับหน้า
     initData(false);
   }, []);
 
@@ -53,8 +52,6 @@ export const QCScreen: React.FC = () => {
     try {
         const stats = await fetchCloudStats();
         setCloudStats(stats);
-        
-        // ดึงสินค้าสูงสุด 1000 รายการ เก็บไว้ในเครื่องเพื่อความเร็ว
         const data = await fetchMasterDataBatch(force);
         setCachedProducts(data);
     } catch (e) {
@@ -79,7 +76,7 @@ export const QCScreen: React.FC = () => {
             html5QrCodeRef.current = html5QrCode;
             await html5QrCode.start(
                 { facingMode: "environment" }, 
-                { fps: 20, qrbox: { width: 260, height: 180 } }, // ปรับขนาดให้เหมาะกับมือถือ
+                { fps: 20, qrbox: { width: 260, height: 180 } },
                 (decodedText) => processBarcode(decodedText),
                 () => {}
             );
@@ -106,7 +103,6 @@ export const QCScreen: React.FC = () => {
         const base64 = await compressImage(blob);
         const base64Data = base64.split(',')[1];
         
-        // Fix: Created a new instance and used responseSchema for structured data as per guidelines
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -145,7 +141,6 @@ export const QCScreen: React.FC = () => {
     const cleanCode = String(code).trim();
     if (!cleanCode) return;
     
-    // ค้นหาจากรายการ 1000 รายการที่โหลดไว้ในเครื่อง
     const found = cachedProducts.find(p => p.barcode.toLowerCase() === cleanCode.toLowerCase());
     
     if (found) {
@@ -154,6 +149,7 @@ export const QCScreen: React.FC = () => {
       setSellingPrice(found.unitPrice?.toString() || '');
       setStatus(QCStatus.PASS);
       setReason('');
+      setRemark('');
       setImages([]);
       setStep('form');
       setErrors({});
@@ -164,8 +160,24 @@ export const QCScreen: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!product || !user) return;
+    
+    const newErrors: {[key:string]: string} = {};
     const price = parseFloat(sellingPrice);
-    if (isNaN(price)) { setErrors({ price: 'กรุณาระบุราคาขาย' }); return; }
+    
+    if (isNaN(price)) {
+        newErrors.price = 'กรุณาระบุราคาขายที่พบ';
+    }
+    
+    if (status === QCStatus.DAMAGE && !reason) {
+        newErrors.reason = 'กรุณาระบุสาเหตุที่สินค้าชำรุด';
+    }
+
+    if (Object.keys(newErrors).length > 0) {
+        setErrors(newErrors);
+        // เลื่อนหน้าจอขึ้นไปดู Error
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+    }
 
     setIsSaving(true);
     try {
@@ -179,9 +191,10 @@ export const QCScreen: React.FC = () => {
             remark,
             imageUrls: images,
             inspectorId: user.username,
+            lotNo: product.lotNo || '',
+            productType: product.productType || '',
         });
 
-        // อัปเดตรายการในเครื่องทันที
         const updatedList = cachedProducts.filter(p => p.barcode !== product.barcode);
         setCachedProducts(updatedList);
         setCloudStats(prev => ({ ...prev, total: prev.total - 1, checked: prev.checked + 1 }));
@@ -189,15 +202,17 @@ export const QCScreen: React.FC = () => {
         setStep('scan');
         setBarcode('');
         setProduct(null);
+        setErrors({});
+        alert("✅ บันทึกข้อมูลเรียบร้อยแล้ว");
     } catch (e: any) { 
-        alert(`ผิดพลาด: ${e.message}`); 
+        console.error("Submit Error:", e);
+        alert(`❌ ผิดพลาด: ${e.message || "ไม่สามารถบันทึกได้ กรุณาลองใหม่อีกครั้ง"}`); 
     } finally { setIsSaving(false); }
   };
 
   return (
     <div className="max-w-4xl mx-auto pb-24 px-4 animate-fade-in space-y-8">
       
-      {/* Syncing Overlay */}
       {isSyncing && (
           <div className="fixed inset-0 z-[300] bg-white/95 dark:bg-gray-900/95 flex flex-col items-center justify-center p-8 text-center animate-fade-in">
               <div className="bg-white dark:bg-gray-800 p-12 rounded-[4rem] shadow-2xl border border-gray-100 flex flex-col items-center gap-8 max-w-sm w-full animate-slide-up">
@@ -212,7 +227,6 @@ export const QCScreen: React.FC = () => {
 
       {step === 'scan' ? (
         <div className="space-y-8">
-          {/* Live Stats Panel */}
           <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 flex items-center gap-4">
                   <div className="p-4 bg-blue-50 dark:bg-blue-900/30 rounded-2xl text-blue-500">
@@ -244,7 +258,7 @@ export const QCScreen: React.FC = () => {
           </div>
 
           <div className="flex flex-col items-center justify-center gap-10 py-10 bg-white dark:bg-gray-800 rounded-[4rem] shadow-sm border border-gray-100">
-            <div className="relative p-12 md:p-16 bg-gradient-to-br from-pastel-blueDark to-blue-800 rounded-[5rem] shadow-2xl text-white active:scale-95 transition-all">
+            <div className="relative p-12 md:p-16 bg-gradient-to-br from-pastel-blueDark to-blue-800 rounded-[5rem] shadow-2xl text-white active:scale-95 transition-all cursor-pointer" onClick={startScanner}>
                 <Scan size={80} strokeWidth={1.5} />
                 <div className="absolute -top-2 -right-2 bg-red-500 w-6 h-6 rounded-full animate-ping opacity-75" />
             </div>
@@ -261,9 +275,9 @@ export const QCScreen: React.FC = () => {
                       onChange={(e) => setBarcode(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && processBarcode(barcode)}
                       placeholder="สแกน หรือ พิมพ์รหัส..."
-                      className="w-full pl-8 pr-16 py-6 text-xl rounded-[2rem] bg-gray-50 dark:bg-gray-900 shadow-inner border-none focus:ring-4 focus:ring-pastel-blueDark/10 transition-all font-mono"
+                      className="w-full pl-8 pr-16 py-6 text-xl rounded-[2rem] bg-gray-50 dark:bg-gray-900 shadow-inner border-none focus:ring-4 focus:ring-pastel-blueDark/10 transition-all font-mono dark:text-white"
                     />
-                    <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-4 rounded-2xl shadow-lg">
+                    <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-4 rounded-2xl shadow-lg hover:scale-105 active:scale-95 transition-all">
                         <Camera size={24} />
                     </button>
                 </div>
@@ -275,7 +289,7 @@ export const QCScreen: React.FC = () => {
                 </div>
 
                 {errors.scan && (
-                <div className="bg-red-50 dark:bg-red-900/10 text-red-600 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100">
+                <div className="bg-red-50 dark:bg-red-900/10 text-red-600 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100 animate-fade-in">
                     <AlertCircle size={20} className="flex-shrink-0" />
                     <span>{errors.scan}</span>
                 </div>
@@ -295,17 +309,25 @@ export const QCScreen: React.FC = () => {
                         <span className="px-3 py-1 bg-pastel-blueDark rounded-full text-[10px] font-bold">COST: ฿{product?.costPrice}</span>
                       </div>
                   </div>
-                  <button onClick={() => setStep('scan')} className="p-3 bg-white/10 rounded-2xl hover:bg-white/20"><X size={24}/></button>
+                  <button onClick={() => setStep('scan')} className="p-3 bg-white/10 rounded-2xl hover:bg-white/20 transition-all"><X size={24}/></button>
               </div>
           </div>
 
           <div className="p-8 md:p-12 space-y-10">
+              {/* Errors in Form */}
+              {(errors.price || errors.reason) && (
+                  <div className="p-4 bg-red-50 text-red-600 rounded-2xl border border-red-100 text-xs font-bold space-y-1">
+                      {errors.price && <p className="flex items-center gap-2"><AlertCircle size={14}/> {errors.price}</p>}
+                      {errors.reason && <p className="flex items-center gap-2"><AlertCircle size={14}/> {errors.reason}</p>}
+                  </div>
+              )}
+
               <div className="grid grid-cols-2 gap-4 md:gap-8">
-                  <button onClick={() => setStatus(QCStatus.PASS)} className={`p-8 md:p-12 rounded-[3rem] border-4 flex flex-col items-center gap-4 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50 text-green-700 scale-[1.05]' : 'border-gray-50 opacity-30 grayscale'}`}>
+                  <button onClick={() => { setStatus(QCStatus.PASS); setErrors({}); }} className={`p-8 md:p-12 rounded-[3rem] border-4 flex flex-col items-center gap-4 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50 text-green-700 scale-[1.05]' : 'border-gray-50 opacity-30 grayscale'}`}>
                       <CheckCircle2 size={48} />
                       <span className="text-xs font-black uppercase tracking-widest">ผ่าน (Pass)</span>
                   </button>
-                  <button onClick={() => setStatus(QCStatus.DAMAGE)} className={`p-8 md:p-12 rounded-[3rem] border-4 flex flex-col items-center gap-4 transition-all ${status === QCStatus.DAMAGE ? 'border-red-500 bg-red-50 text-red-700 scale-[1.05]' : 'border-gray-50 opacity-30 grayscale'}`}>
+                  <button onClick={() => { setStatus(QCStatus.DAMAGE); setErrors({}); }} className={`p-8 md:p-12 rounded-[3rem] border-4 flex flex-col items-center gap-4 transition-all ${status === QCStatus.DAMAGE ? 'border-red-500 bg-red-50 text-red-700 scale-[1.05]' : 'border-gray-50 opacity-30 grayscale'}`}>
                       <AlertTriangle size={48} />
                       <span className="text-xs font-black uppercase tracking-widest">ชำรุด (Damage)</span>
                   </button>
@@ -316,18 +338,22 @@ export const QCScreen: React.FC = () => {
                   <div className="relative">
                       <span className="absolute left-6 top-1/2 -translate-y-1/2 text-3xl font-bold text-gray-300">฿</span>
                       <input 
-                        type="number" step="0.01" value={sellingPrice} onChange={e => setSellingPrice(e.target.value)}
-                        className="w-full pl-16 pr-8 py-8 bg-gray-50 dark:bg-gray-900 rounded-[3rem] text-4xl font-mono font-black outline-none border-none focus:ring-4 focus:ring-pastel-blueDark/10"
+                        type="number" step="0.01" value={sellingPrice} onChange={e => { setSellingPrice(e.target.value); setErrors(prev => ({...prev, price: ''})); }}
+                        className={`w-full pl-16 pr-8 py-8 bg-gray-50 dark:bg-gray-900 rounded-[3rem] text-4xl font-mono font-black outline-none border-none focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white ${errors.price ? 'ring-2 ring-red-300 bg-red-50' : ''}`}
                         placeholder="0.00"
                       />
                   </div>
               </div>
 
               {status === QCStatus.DAMAGE && (
-                  <div className="space-y-6 p-8 bg-gray-50 dark:bg-gray-900 rounded-[3rem] border border-red-50">
+                  <div className="space-y-6 p-8 bg-gray-50 dark:bg-gray-900 rounded-[3rem] border border-red-50 animate-fade-in">
                       <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-red-500/70 ml-2">สาเหตุความชำรุด</label>
-                        <select value={reason} onChange={e => setReason(e.target.value)} className="w-full p-5 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-bold border-none shadow-sm">
+                        <label className="text-[10px] font-black uppercase text-red-500/70 ml-2">สาเหตุความชำรุด *</label>
+                        <select 
+                            value={reason} 
+                            onChange={e => { setReason(e.target.value); setErrors(prev => ({...prev, reason: ''})); }} 
+                            className={`w-full p-5 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-bold border-none shadow-sm dark:text-white ${errors.reason ? 'ring-2 ring-red-300 bg-red-50' : ''}`}
+                        >
                             <option value="">-- เลือกสาเหตุ --</option>
                             {REASON_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                         </select>
@@ -336,7 +362,7 @@ export const QCScreen: React.FC = () => {
                         <label className="text-[10px] font-black uppercase text-gray-400 ml-2">รูปถ่าย ({images.length}/5)</label>
                         <div className="flex flex-wrap gap-4">
                             {images.length < 5 && (
-                              <label className="w-20 h-20 rounded-2xl border-4 border-dashed border-gray-200 bg-white flex items-center justify-center text-gray-300 cursor-pointer">
+                              <label className="w-20 h-20 rounded-2xl border-4 border-dashed border-gray-200 bg-white dark:bg-gray-800 flex items-center justify-center text-gray-300 cursor-pointer hover:border-pastel-blueDark hover:text-pastel-blueDark transition-all">
                                   <Camera size={28} />
                                   <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
                                       if (e.target.files?.[0]) {
@@ -347,19 +373,28 @@ export const QCScreen: React.FC = () => {
                               </label>
                             )}
                             {images.map((img, idx) => (
-                                <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden border-2 border-white">
+                                <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden border-2 border-white dark:border-gray-700 shadow-sm animate-fade-in">
                                     <img src={img} className="w-full h-full object-cover" />
-                                    <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-lg"><X size={12}/></button>
+                                    <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-lg hover:scale-110 active:scale-90 transition-all"><X size={12}/></button>
                                 </div>
                             ))}
                         </div>
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-[10px] font-black uppercase text-gray-400 ml-2">หมายเหตุเพิ่มเติม</label>
+                        <textarea 
+                            value={remark} 
+                            onChange={e => setRemark(e.target.value)} 
+                            className="w-full p-5 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-medium border-none shadow-sm dark:text-white h-24 resize-none"
+                            placeholder="ระบุรายละเอียดเพิ่มเติม..."
+                        />
                       </div>
                   </div>
               )}
 
               <button 
                 onClick={handleSubmit} disabled={isSaving} 
-                className="w-full py-8 rounded-[3.5rem] bg-gradient-to-r from-pastel-blueDark to-blue-600 text-white font-black text-xl shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50"
+                className="w-full py-8 rounded-[3.5rem] bg-gradient-to-r from-pastel-blueDark to-blue-600 text-white font-black text-xl shadow-2xl hover:shadow-blue-500/40 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50"
               >
                   {isSaving ? <Loader2 className="animate-spin" size={28} /> : <>บันทึกผลตรวจสอบ <Zap size={24} fill="currentColor" /></>}
               </button>
@@ -371,14 +406,14 @@ export const QCScreen: React.FC = () => {
         <div className="fixed inset-0 z-[100] flex flex-col bg-black">
           <div className="p-8 flex justify-between items-center text-white bg-gradient-to-b from-black to-transparent">
             <h3 className="font-black tracking-widest uppercase text-xs flex items-center gap-2"><Scan size={20} className="text-pastel-blueDark" /> Vision Scan</h3>
-            <button onClick={stopScanner} className="p-4 bg-white/10 rounded-2xl"><X size={28} /></button>
+            <button onClick={stopScanner} className="p-4 bg-white/10 rounded-2xl hover:bg-white/20 active:scale-90 transition-all"><X size={28} /></button>
           </div>
           <div id="reader" className="flex-1 w-full bg-black"></div>
           <div className="p-10 flex flex-col items-center gap-8 bg-gradient-to-t from-black to-transparent">
             <button 
                 onClick={analyzeWithAi} 
                 disabled={isAiProcessing}
-                className="bg-white text-black px-12 py-5 rounded-[2.5rem] flex items-center gap-3 font-black transition-all active:scale-95"
+                className="bg-white text-black px-12 py-5 rounded-[2.5rem] flex items-center gap-3 font-black transition-all active:scale-95 shadow-xl disabled:opacity-50"
             >
                 {isAiProcessing ? <Loader2 size={24} className="animate-spin" /> : <Sparkles size={24} className="text-pastel-blueDark" />}
                 <span className="text-sm uppercase tracking-widest">{isAiProcessing ? 'Thinking...' : 'AI Vision Helper'}</span>
