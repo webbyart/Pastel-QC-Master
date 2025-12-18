@@ -85,15 +85,18 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     return responseText ? JSON.parse(responseText) : true;
 };
 
-// ดึงตัวเลขสรุปจาก Cloud
+// ดึงตัวเลขสรุปจาก Cloud (Dynamic stats)
 export const fetchCloudStats = async () => {
     const [totalProducts, totalLogs] = await Promise.all([
         callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
         callSupabase('qc_logs', 'GET', null, '?select=id&limit=1', true)
     ]);
+    const remaining = Number(totalProducts);
+    const checked = Number(totalLogs);
     return { 
-        totalInStore: Number(totalProducts), 
-        totalChecked: Number(totalLogs) 
+        remaining,
+        checked,
+        total: remaining + checked
     };
 };
 
@@ -105,27 +108,30 @@ export const fetchMasterData = async (forceUpdate = false, onProgress?: (current
         const totalCount = await callSupabase('products', 'GET', null, '?select=barcode&limit=1', true) as number;
         let allData: any[] = [];
         let offset = 0;
-        const limit = 500; // ดึงรอบละ 500 รายการตามสั่ง
+        const limit = 500; // Batch size: 500 items per round
+
+        if (onProgress) onProgress(0, totalCount);
 
         while (offset < totalCount) {
             const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}&offset=${offset}`);
             if (Array.isArray(data)) {
                 allData = [...allData, ...data];
-                offset += limit;
-                if (onProgress) onProgress(Math.min(offset, totalCount), totalCount);
+                offset += data.length;
+                if (onProgress) onProgress(offset, totalCount);
+                if (data.length < limit) break; // End of records
             } else {
                 break;
             }
         }
 
-        if (allData.length > 0) {
+        if (allData.length >= 0) {
             const mapped = allData.map(item => ({
                 barcode: String(item.barcode).trim(),
-                productName: item.product_name,
-                costPrice: Number(item.cost_price),
-                unitPrice: Number(item.unit_price),
-                lotNo: item.lot_no,
-                productType: item.product_type
+                productName: item.product_name || 'No Name',
+                costPrice: Number(item.cost_price || 0),
+                unitPrice: Number(item.unit_price || 0),
+                lotNo: item.lot_no || '',
+                productType: item.product_type || ''
             }));
             await dbSet(KEYS.CACHE_MASTER, mapped);
             return mapped;
@@ -149,6 +155,7 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         image_urls: record.imageUrls || [],
         timestamp: new Date().toISOString()
     });
+    // Remove from inventory once checked
     await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
 };
 
@@ -156,7 +163,7 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     const cached = await dbGet(KEYS.CACHE_LOGS);
     if (cached && !forceUpdate) return cached;
     try {
-        const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=1000');
+        const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=2000');
         if (Array.isArray(data)) {
             const mapped: QCRecord[] = data.map(item => ({
                 id: String(item.id),
@@ -213,7 +220,7 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     if (!products.length) return;
-    const CHUNK_SIZE = 100;
+    const CHUNK_SIZE = 500; // Efficient chunking for Supabase
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
         const chunk = products.slice(i, i + CHUNK_SIZE);
         const payloads = chunk.map(p => ({
