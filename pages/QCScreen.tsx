@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { fetchMasterData, saveQCRecord, compressImage } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
-import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu } from 'lucide-react';
+import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw } from 'lucide-react';
 import { Html5Qrcode } from "html5-qrcode";
 import { GoogleGenAI } from "@google/genai";
 
@@ -41,7 +41,8 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    fetchMasterData(false).then(setCachedProducts);
+    // Force sync with cloud on mount to ensure latest data
+    fetchMasterData(true).then(setCachedProducts);
   }, []);
 
   const stopScanner = async () => {
@@ -57,11 +58,12 @@ export const QCScreen: React.FC = () => {
         try {
             const html5QrCode = new Html5Qrcode("reader");
             html5QrCodeRef.current = html5QrCode;
+            // CRITICAL: Force rear camera for barcode precision
             await html5QrCode.start(
                 { facingMode: "environment" }, 
                 { 
-                  fps: 20, 
-                  qrbox: { width: 280, height: 200 },
+                  fps: 25, 
+                  qrbox: { width: 300, height: 200 },
                   aspectRatio: 1.0 
                 }, 
                 (decodedText) => {
@@ -71,14 +73,14 @@ export const QCScreen: React.FC = () => {
                 () => {}
             );
         } catch (err) {
-            alert("ไม่สามารถเปิดกล้องได้");
+            alert("ไม่สามารถเปิดกล้องหลังได้ กรุณาตรวจสอบสิทธิ์การเข้าถึงกล้อง");
             setShowScanner(false);
         }
     }, 150);
   };
 
-  // AI-Powered: Capture frame from live video and identify
-  const captureAndIdentifyWithAi = async () => {
+  // AI-Powered: Capture frame from live video and identify barcode
+  const analyzeWithAi = async () => {
     const video = document.querySelector('#reader video') as HTMLVideoElement;
     if (!video) return;
 
@@ -95,14 +97,14 @@ export const QCScreen: React.FC = () => {
             const base64Data = base64.split(',')[1];
             
             const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-            const prompt = `Identify the product barcode or product name from this image. 
-            Especially focus on barcodes (EAN-13, EAN-8, Code 128, etc.). 
+            const prompt = `Find any visible barcode or SKU label in this image. 
+            Identify the string code (like EAN-13, RMS ID, etc.). 
             Return JSON: {"barcode": "string_or_null", "product_name": "string_or_null"}`;
 
             const response = await ai.models.generateContent({
                 model: 'gemini-3-flash-preview',
                 contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: prompt }] },
-                config: { responseMimeType: 'application/json' }
+                config: { responseMimeType: 'application/json', temperature: 0.1 }
             });
 
             const result = JSON.parse(response.text || '{}');
@@ -110,22 +112,24 @@ export const QCScreen: React.FC = () => {
                 stopScanner();
                 processBarcode(result.barcode);
             } else if (result.product_name) {
+                // If barcode fails, search by identified name
                 const found = cachedProducts.find(p => p.productName.toLowerCase().includes(result.product_name.toLowerCase()));
                 if (found) {
                     stopScanner();
                     setProduct(found);
                     setStep('form');
+                    setErrors({});
                 } else {
-                    alert(`AI พบสินค้าชื่อ "${result.product_name}" แต่ไม่มีในคลัง`);
+                    alert(`AI พบชื่อสินค้า "${result.product_name}" แต่ไม่มีในฐานข้อมูลคลังสินค้า`);
                 }
             } else {
-                alert("AI ไม่สามารถระบุบาร์โค้ดจากภาพนี้ได้ กรุณาลองใหม่");
+                alert("AI ไม่พบรหัสบาร์โค้ดในภาพนี้ กรุณาขยับกล้องให้ชัดขึ้น");
             }
             setIsAiProcessing(false);
         }, 'image/jpeg', 0.8);
     } catch (e) {
         setIsAiProcessing(false);
-        alert("AI Processing Error");
+        console.error("AI Analysis failed", e);
     }
   };
 
@@ -141,40 +145,18 @@ export const QCScreen: React.FC = () => {
       setStep('form');
       setErrors({});
     } else {
-      setErrors({ scan: `ไม่พบรหัสบาร์โค้ด "${cleanCode}" ในคลังสินค้า` });
-      setTimeout(() => setErrors({}), 4000);
+      setErrors({ scan: `ไม่พบรหัสบาร์โค้ด "${cleanCode}" ในคลังสินค้า (กรุณาเช็คว่า Import ข้อมูลแล้วหรือยัง)` });
+      setTimeout(() => setErrors({}), 5000);
     }
-  };
-
-  const handleManualSmartIdentify = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files || !e.target.files[0]) return;
-    setIsAiProcessing(true);
-    setErrors({});
-    try {
-      const file = e.target.files[0];
-      const base64 = await compressImage(file);
-      const base64Data = base64.split(',')[1];
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: base64Data } }, { text: 'Extract barcode JSON: {"barcode": "string"}' }] },
-        config: { responseMimeType: 'application/json' }
-      });
-      const result = JSON.parse(response.text || '{}');
-      if (result.barcode) processBarcode(result.barcode);
-      else setErrors({ scan: "AI ไม่สามารถอ่านข้อมูลบาร์โค้ดจากภาพนี้ได้" });
-    } catch (err) {
-      setErrors({ scan: "AI Error: เกิดข้อผิดพลาด" });
-    } finally { setIsAiProcessing(false); e.target.value = ''; }
   };
 
   const handleSubmit = async () => {
     if (!product || !user) return;
     const price = parseFloat(sellingPrice);
     const newErrors: any = {};
-    if (isNaN(price)) newErrors.price = 'ระบุราคาขาย';
-    if ((status === QCStatus.DAMAGE || price === 0) && !reason) newErrors.reason = 'ระบุสาเหตุ';
-    if ((status === QCStatus.DAMAGE || price === 0) && images.length === 0) newErrors.images = 'แนบรูปหลักฐานอย่างน้อย 1 รูป';
+    if (isNaN(price)) newErrors.price = 'กรุณาระบุราคาขาย';
+    if ((status === QCStatus.DAMAGE || price === 0) && !reason) newErrors.reason = 'กรุณาระบุสาเหตุ';
+    if ((status === QCStatus.DAMAGE || price === 0) && images.length === 0) newErrors.images = 'กรุณาแนบรูปหลักฐานอย่างน้อย 1 รูป';
 
     if (Object.keys(newErrors).length > 0) { setErrors(newErrors); return; }
 
@@ -195,21 +177,23 @@ export const QCScreen: React.FC = () => {
         setBarcode('');
         setProduct(null);
         setErrors({});
-        alert('✅ บันทึกข้อมูลสำเร็จ');
-    } catch (e: any) { alert(`❌ บันทึกไม่สำเร็จ: ${e.message}`); } finally { setIsSaving(false); }
+        alert('✅ บันทึกผล QC สำเร็จ!');
+    } catch (e: any) { 
+        alert(`❌ เกิดข้อผิดพลาด: ${e.message}`); 
+    } finally { setIsSaving(false); }
   };
 
   return (
     <div className="max-w-2xl mx-auto pb-24 px-4">
       {step === 'scan' ? (
         <div className="flex flex-col items-center justify-center min-h-[75vh] gap-8 animate-fade-in py-8">
-          <div className="relative p-14 bg-gradient-to-br from-pastel-blueDark to-blue-900 rounded-[4rem] shadow-2xl shadow-blue-500/40 text-white transition-transform hover:rotate-3 duration-500">
+          <div className="relative p-14 bg-gradient-to-br from-pastel-blueDark to-blue-900 rounded-[4rem] shadow-2xl shadow-blue-500/40 text-white transition-transform hover:scale-105 duration-500">
             <Scan size={80} strokeWidth={1} className="animate-pulse" />
           </div>
 
           <div className="text-center space-y-2">
-            <h2 className="text-2xl font-display font-bold text-gray-800 dark:text-white">เครื่องสแกนอัจฉริยะ</h2>
-            <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em] opacity-60">Ready to Quality Control</p>
+            <h2 className="text-2xl font-display font-bold text-gray-800 dark:text-white">QC SCANNER</h2>
+            <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] opacity-60">Smart Quality Analysis System</p>
           </div>
           
           <div className="w-full max-w-sm space-y-5">
@@ -218,19 +202,22 @@ export const QCScreen: React.FC = () => {
                   type="text" autoFocus value={barcode}
                   onChange={(e) => setBarcode(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && processBarcode(barcode)}
-                  placeholder="สแกน หรือกรอกรหัสบาร์โค้ด..."
-                  className="w-full pl-6 pr-14 py-5 text-lg rounded-3xl bg-white dark:bg-gray-800 shadow-xl border-2 border-transparent focus:border-pastel-blueDark focus:ring-0 transition-all font-mono"
+                  placeholder="สแกน หรือพิมพ์รหัสบาร์โค้ด..."
+                  className="w-full pl-6 pr-16 py-5 text-lg rounded-3xl bg-white dark:bg-gray-800 shadow-xl border-2 border-transparent focus:border-pastel-blueDark focus:ring-0 transition-all font-mono"
                 />
-                <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg">
+                <button onClick={startScanner} className="absolute right-3 top-1/2 -translate-y-1/2 bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg hover:scale-105 active:scale-95 transition-all">
                   <Camera size={24} />
                 </button>
             </div>
 
-            <label className={`flex items-center justify-center gap-3 w-full py-5 rounded-3xl bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-200 border-2 border-dashed border-gray-200 dark:border-gray-700 hover:border-pastel-blueDark hover:bg-blue-50/50 transition-all cursor-pointer text-xs font-bold ${isAiProcessing ? 'opacity-50 pointer-events-none' : ''}`}>
-                {isAiProcessing ? <Loader2 size={18} className="animate-spin text-pastel-blueDark"/> : <Sparkles size={18} className="text-amber-500" />}
-                <span>{isAiProcessing ? 'AI กำลังประมวลผล...' : 'AI Smart Identify (อัปโหลดรูป)'}</span>
-                <input type="file" accept="image/*" className="hidden" onChange={handleManualSmartIdentify} disabled={isAiProcessing} />
-            </label>
+            <div className="flex flex-col gap-2">
+                <button 
+                  onClick={() => fetchMasterData(true).then(setCachedProducts)}
+                  className="flex items-center justify-center gap-2 text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-pastel-blueDark transition-colors"
+                >
+                  <RefreshCw size={12} /> Refresh Cloud Data ({cachedProducts.length} items)
+                </button>
+            </div>
 
             {errors.scan && (
               <div className="bg-red-50 text-red-600 p-4 rounded-2xl text-[11px] font-bold flex items-center gap-3 border border-red-100 animate-shake">
@@ -247,14 +234,15 @@ export const QCScreen: React.FC = () => {
                   <div className="max-w-[80%]">
                       <h2 className="text-xl font-bold leading-tight line-clamp-2">{product?.productName}</h2>
                       <div className="flex flex-wrap gap-2 mt-3">
-                        <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-lg text-[9px] font-black border border-blue-500/30 uppercase tracking-wider">RMS: {product?.barcode}</span>
+                        <span className="bg-blue-500/20 text-blue-300 px-3 py-1 rounded-lg text-[9px] font-black border border-blue-500/30 uppercase tracking-wider">RMS ID: {product?.barcode}</span>
                       </div>
                   </div>
-                  <button onClick={() => setStep('scan')} className="p-2 bg-white/10 rounded-full"><X size={18}/></button>
+                  <button onClick={() => setStep('scan')} className="p-2 bg-white/10 rounded-full hover:bg-white/20 transition-colors"><X size={18}/></button>
               </div>
           </div>
 
           <div className="p-6 space-y-6">
+              {/* QC Status Selection */}
               <div className="grid grid-cols-2 gap-4">
                   <button onClick={() => setStatus(QCStatus.PASS)} className={`p-6 rounded-[2rem] border-2 flex flex-col items-center gap-3 transition-all ${status === QCStatus.PASS ? 'border-green-500 bg-green-50/50 dark:bg-green-900/10 text-green-700 dark:text-green-400 shadow-lg scale-[1.02]' : 'border-gray-50 dark:border-gray-700 grayscale opacity-40 hover:grayscale-0'}`}>
                       <CheckCircle2 size={40} strokeWidth={1.5} />
@@ -266,23 +254,25 @@ export const QCScreen: React.FC = () => {
                   </button>
               </div>
 
+              {/* Selling Price */}
               <div className="space-y-2">
                   <label className="text-[10px] font-black uppercase text-gray-400 ml-2 tracking-[0.2em]">ราคาขายหน้าสาขา <span className="text-red-500">*</span></label>
                   <div className="relative">
                       <span className="absolute left-7 top-1/2 -translate-y-1/2 text-3xl font-bold text-gray-300">฿</span>
                       <input 
                         type="number" step="0.01" value={sellingPrice} onChange={e => setSellingPrice(e.target.value)}
-                        className={`w-full pl-14 pr-8 py-6 bg-gray-50 dark:bg-gray-900 rounded-[2.5rem] text-4xl font-mono font-bold outline-none border-2 transition-all ${errors.price ? 'border-red-400' : 'border-transparent focus:border-pastel-blueDark'}`}
+                        className={`w-full pl-14 pr-8 py-6 bg-gray-50 dark:bg-gray-900 rounded-[2.5rem] text-4xl font-mono font-bold outline-none border-2 transition-all ${errors.price ? 'border-red-400' : 'border-transparent focus:border-pastel-blueDark shadow-sm'}`}
                         placeholder="0.00"
                       />
                   </div>
               </div>
 
+              {/* Conditional Damage Details */}
               {(status === QCStatus.DAMAGE || (sellingPrice !== '' && parseFloat(sellingPrice) === 0)) && (
                   <div className="space-y-6 p-6 bg-gray-50 dark:bg-gray-900/50 rounded-[2.5rem] border border-gray-100 dark:border-gray-700 animate-slide-up">
                       <div className="space-y-2">
                           <label className="text-[10px] font-black uppercase text-gray-500 ml-2 tracking-widest">สาเหตุ (Reason) <span className="text-red-500">*</span></label>
-                          <select value={reason} onChange={e => setReason(e.target.value)} className="w-full p-4 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-medium shadow-sm">
+                          <select value={reason} onChange={e => setReason(e.target.value)} className="w-full p-4 rounded-2xl bg-white dark:bg-gray-800 outline-none text-sm font-medium shadow-sm border-none">
                               <option value="">-- กรุณาเลือกสาเหตุ --</option>
                               {REASON_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                           </select>
@@ -292,7 +282,7 @@ export const QCScreen: React.FC = () => {
                           <label className="text-[10px] font-black uppercase text-gray-500 ml-2 tracking-widest">รูปถ่ายหลักฐาน ({images.length}/5) <span className="text-red-500">*</span></label>
                           <div className="flex flex-wrap gap-3">
                               {images.length < 5 && (
-                                <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-gray-300 bg-white dark:bg-gray-800 flex flex-col items-center justify-center text-gray-400 cursor-pointer hover:border-pastel-blueDark transition-all">
+                                <label className="w-20 h-20 rounded-2xl border-2 border-dashed border-gray-300 bg-white dark:bg-gray-800 flex flex-col items-center justify-center text-gray-400 cursor-pointer hover:border-pastel-blueDark transition-all active:scale-95">
                                     <Camera size={24} />
                                     <input type="file" accept="image/*" multiple className="hidden" onChange={async (e) => {
                                         if (e.target.files) {
@@ -307,9 +297,12 @@ export const QCScreen: React.FC = () => {
                                 </label>
                               )}
                               {images.map((img, idx) => (
-                                  <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg border border-white">
-                                      <img src={img} className="w-full h-full object-cover" onClick={() => setPreviewImage(img)} />
-                                      <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="absolute top-1 right-1 bg-red-500 text-white rounded-full p-1"><Trash2 size={12}/></button>
+                                  <div key={idx} className="relative w-20 h-20 rounded-2xl overflow-hidden shadow-lg border-2 border-white dark:border-gray-700 group">
+                                      <img src={img} className="w-full h-full object-cover cursor-pointer" onClick={() => setPreviewImage(img)} />
+                                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                                          <button onClick={() => setPreviewImage(img)} className="p-1.5 bg-white/20 rounded-lg mr-1"><Maximize2 size={12} /></button>
+                                          <button onClick={() => setImages(images.filter((_, i) => i !== idx))} className="p-1.5 bg-red-500/80 rounded-lg"><Trash2 size={12}/></button>
+                                      </div>
                                   </div>
                               ))}
                           </div>
@@ -321,47 +314,49 @@ export const QCScreen: React.FC = () => {
                 onClick={handleSubmit} disabled={isSaving} 
                 className="w-full py-6 rounded-[2.5rem] bg-gradient-to-r from-pastel-blueDark to-blue-900 text-white font-bold text-lg shadow-xl shadow-blue-500/30 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50"
               >
-                  {isSaving ? <Loader2 className="animate-spin" /> : <>ยืนยันการบันทึก <Zap size={20} fill="currentColor" /></>}
+                  {isSaving ? <Loader2 className="animate-spin" /> : <>บันทึกข้อมูล QC <Zap size={20} fill="currentColor" /></>}
               </button>
           </div>
         </div>
       )}
 
+      {/* Live Camera Scanner Overlay */}
       {showScanner && (
         <div className="fixed inset-0 z-[100] flex flex-col bg-black animate-fade-in">
           <div className="p-6 flex justify-between items-center text-white bg-gradient-to-b from-black/80 to-transparent">
-            <h3 className="font-bold flex items-center gap-3"><Scan size={24} className="text-pastel-blue" /> สแกนบาร์โค้ด</h3>
-            <button onClick={stopScanner} className="p-3 bg-white/10 rounded-full"><X size={24} /></button>
+            <h3 className="font-bold flex items-center gap-3"><Scan size={24} className="text-pastel-blue" /> LIVE SCANNER</h3>
+            <button onClick={stopScanner} className="p-3 bg-white/10 rounded-full active:scale-90 transition-all"><X size={24} /></button>
           </div>
           <div id="reader" className="flex-1 w-full bg-black relative">
              <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                <div className="w-72 h-52 border-2 border-pastel-blue/40 rounded-3xl relative">
-                   <div className="absolute -top-1 -left-1 w-8 h-8 border-t-4 border-l-4 border-pastel-blue rounded-tl-lg"></div>
-                   <div className="absolute -top-1 -right-1 w-8 h-8 border-t-4 border-r-4 border-pastel-blue rounded-tr-lg"></div>
-                   <div className="absolute top-1/2 left-0 right-0 h-0.5 bg-red-500/50 animate-pulse"></div>
+                <div className="w-72 h-52 border-2 border-pastel-blue/40 rounded-[2.5rem] relative">
+                   <div className="absolute -top-1 -left-1 w-10 h-10 border-t-4 border-l-4 border-pastel-blue rounded-tl-3xl"></div>
+                   <div className="absolute -top-1 -right-1 w-10 h-10 border-t-4 border-r-4 border-pastel-blue rounded-tr-3xl"></div>
+                   <div className="absolute top-1/2 left-4 right-4 h-0.5 bg-red-500/50 animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.5)]"></div>
                 </div>
              </div>
           </div>
-          <div className="p-8 flex flex-col items-center gap-4 bg-gradient-to-t from-black/80 to-transparent">
+          <div className="p-8 flex flex-col items-center gap-5 bg-gradient-to-t from-black/80 to-transparent">
             <button 
-                onClick={captureAndIdentifyWithAi} 
+                onClick={analyzeWithAi} 
                 disabled={isAiProcessing}
-                className="bg-white/10 hover:bg-white/20 text-white px-8 py-3 rounded-full flex items-center gap-3 transition-all border border-white/20 disabled:opacity-50"
+                className="bg-white/10 hover:bg-white/20 text-white px-8 py-3.5 rounded-full flex items-center gap-3 transition-all border border-white/20 disabled:opacity-50 shadow-xl backdrop-blur-md"
             >
                 {isAiProcessing ? <Loader2 size={18} className="animate-spin" /> : <Cpu size={18} className="text-pastel-blue" />}
-                <span className="text-xs font-bold uppercase tracking-widest">{isAiProcessing ? 'AI กำลังวิเคราะห์ภาพ...' : 'AI Vision Capture'}</span>
+                <span className="text-xs font-black uppercase tracking-[0.2em]">{isAiProcessing ? 'AI Analysing...' : 'AI VISION CAPTURE'}</span>
             </button>
-            <p className="text-[10px] font-medium text-gray-400 uppercase tracking-widest">หันกล้องหลังไปที่บาร์โค้ดสินค้าให้ชัดเจน</p>
+            <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">หันกล้องไปที่บาร์โค้ดแล้วกด AI Capture หากสแกนปกติไม่ติด</p>
           </div>
         </div>
       )}
 
+      {/* Fullscreen Image Preview */}
       {previewImage && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 animate-fade-in">
-            <div className="absolute inset-0 bg-black/90 backdrop-blur-sm" onClick={() => setPreviewImage(null)} />
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-md" onClick={() => setPreviewImage(null)} />
             <div className="relative max-w-full max-h-full">
-                <img src={previewImage} className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl" />
-                <button onClick={() => setPreviewImage(null)} className="absolute -top-4 -right-4 p-3 bg-white text-black rounded-full shadow-xl"><X size={20}/></button>
+                <img src={previewImage} className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl border-4 border-white/10" />
+                <button onClick={() => setPreviewImage(null)} className="absolute -top-12 right-0 p-3 bg-white text-black rounded-full shadow-xl hover:scale-110 active:scale-95 transition-all"><X size={20}/></button>
             </div>
         </div>
       )}

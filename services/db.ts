@@ -91,23 +91,25 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     }
 };
 
-export const testApiConnection = async (url: string, key: string) => {
+export const loginUser = (username: string): User | null => {
+  const normalized = username.toLowerCase();
+  if (normalized === 'admin') return { id: 'admin-1', username: 'admin', role: 'admin' };
+  if (normalized === 'user') return { id: 'user-1', username: 'user', role: 'user' };
+  return null;
+};
+
+export const testApiConnection = async (url: string, key: string): Promise<{success: boolean, message?: string, error?: string}> => {
     try {
-        const res = await fetch(`${url}/rest/v1/products?select=barcode&limit=1`, {
-            method: 'GET',
+        const endpoint = `${url}/rest/v1/products?select=barcode&limit=1`;
+        const res = await fetch(endpoint, {
             headers: { 'apikey': key, 'Authorization': `Bearer ${key}` }
         });
-        return { success: res.ok, message: res.ok ? "Connected!" : "Connection failed" };
+        if (res.ok) return { success: true, message: 'Connected successfully' };
+        const errText = await res.text();
+        return { success: false, error: errText };
     } catch (e: any) {
         return { success: false, error: e.message };
     }
-};
-
-export const loginUser = (username: string): User | null => {
-  const u = username.toLowerCase().trim();
-  if (u === 'admin') return { id: '1', username: 'admin', role: 'admin' };
-  if (u === 'user') return { id: '2', username: 'user', role: 'user' };
-  return null;
 };
 
 export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaster[]> => {
@@ -131,19 +133,73 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
     return cached || [];
 };
 
-export const bulkSaveProducts = async (products: ProductMaster[]) => {
-    // Ensuring column names match Supabase table schema
-    const payloads = products.map(p => ({
+export const saveProduct = async (p: ProductMaster) => {
+    const payload = {
         barcode: String(p.barcode).trim(),
         product_name: p.productName,
         cost_price: p.costPrice,
-        unit_price: p.unitPrice || 0,
-        lot_no: p.lotNo || '',
-        product_type: p.productType || ''
-    }));
-    await callSupabase('products', 'POST', payloads);
-    await dbSet(KEYS.CACHE_MASTER, products);
+        unit_price: p.unitPrice,
+        lot_no: p.lotNo,
+        product_type: p.productType
+    };
+    const result = await callSupabase('products', 'POST', payload);
+    await fetchMasterData(true);
+    return result;
+};
+
+export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
+    if (!products.length) return true;
+    const CHUNK_SIZE = 50;
+    const total = products.length;
+    let processed = 0;
+
+    for (let i = 0; i < total; i += CHUNK_SIZE) {
+        const chunk = products.slice(i, i + CHUNK_SIZE);
+        const payloads = chunk.map(p => ({
+            barcode: String(p.barcode).trim(),
+            product_name: p.productName,
+            cost_price: p.costPrice || 0,
+            unit_price: p.unitPrice || 0,
+            lot_no: p.lotNo || '',
+            product_type: p.productType || ''
+        }));
+        
+        await callSupabase('products', 'POST', payloads);
+        processed += chunk.length;
+        if (onProgress) onProgress(Math.floor((processed / total) * 100));
+    }
+    
+    await fetchMasterData(true);
     return true;
+};
+
+export const deleteProduct = async (barcode: string) => {
+    const result = await callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
+    await fetchMasterData(true);
+    return result;
+};
+
+export const clearAllCloudData = async (onProgress?: (pct: number) => void) => {
+    try {
+        // Step 1: ลบประวัติการตรวจ (qc_logs)
+        if (onProgress) onProgress(10);
+        await callSupabase('qc_logs', 'DELETE', null, '?id=neq.-1');
+        
+        // Step 2: ลบสินค้า (products)
+        if (onProgress) onProgress(50);
+        await callSupabase('products', 'DELETE', null, '?barcode=neq.EXECUTE_TRUNCATE');
+        
+        // Step 3: ล้าง Cache ในเครื่อง
+        if (onProgress) onProgress(80);
+        await dbDel(KEYS.CACHE_MASTER);
+        await dbDel(KEYS.CACHE_LOGS);
+        
+        if (onProgress) onProgress(100);
+        return true;
+    } catch (e: any) {
+        console.error("Cloud clear failed:", e);
+        throw new Error("ลบข้อมูลบน Cloud ไม่สำเร็จ กรุณาตรวจสอบสิทธิ์การเข้าถึง");
+    }
 };
 
 export const saveQCRecord = async (record: any) => {
@@ -156,10 +212,12 @@ export const saveQCRecord = async (record: any) => {
         reason: record.reason,
         remark: record.remark,
         inspector_id: record.inspectorId,
-        image_urls: record.imageUrls,
+        image_urls: record.imageUrls || [],
         timestamp: new Date().toISOString()
     };
-    return await callSupabase('qc_logs', 'POST', payload);
+    const result = await callSupabase('qc_logs', 'POST', payload);
+    await fetchQCLogs(true);
+    return result;
 };
 
 export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
@@ -210,15 +268,19 @@ export const compressImage = (file: File | Blob): Promise<string> => {
     });
 };
 
-export const importMasterData = async (file: File): Promise<ProductMaster[]> => {
+export const importMasterData = async (file: File, onProgress?: (pct: number) => void): Promise<ProductMaster[]> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
+        if (onProgress) onProgress(10);
         reader.onload = (e) => {
             try {
+                if (onProgress) onProgress(40);
                 const data = e.target?.result;
                 const workbook = XLSX.read(data, { type: 'binary' });
+                if (onProgress) onProgress(60);
                 const worksheet = workbook.Sheets[workbook.SheetNames[0]];
                 const json = XLSX.utils.sheet_to_json(worksheet) as any[];
+                if (onProgress) onProgress(80);
 
                 const mapped: ProductMaster[] = json.map(row => ({
                     barcode: String(row['RMS Return Item ID'] || row['Barcode'] || row['barcode'] || '').trim(),
@@ -229,6 +291,7 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
                     productType: String(row['Type'] || row['type'] || ''),
                 })).filter(p => p.barcode && p.productName);
 
+                if (onProgress) onProgress(100);
                 resolve(mapped);
             } catch (err) { reject(err); }
         };
@@ -236,37 +299,8 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
     });
 };
 
-export const saveProduct = async (p: ProductMaster) => {
-    const payload = {
-        barcode: String(p.barcode).trim(),
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
-        lot_no: p.lotNo,
-        product_type: p.productType
-    };
-    return await callSupabase('products', 'POST', payload);
-};
-
-export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
 export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
 export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
-
-// Fix: Implement getDataSource to read from localStorage with fallback
-export const getDataSource = (): DataSourceType => {
-  const stored = localStorage.getItem(KEYS.DATA_SOURCE);
-  if (stored === DataSourceType.GOOGLE_SHEETS || stored === DataSourceType.MYSQL_BRIDGE || stored === DataSourceType.SUPABASE) {
-    return stored as DataSourceType;
-  }
-  return DataSourceType.SUPABASE;
-};
-
-// Fix: Add missing setDataSource export to resolve error in pages/Settings.tsx
-export const setDataSource = (type: DataSourceType) => {
-  localStorage.setItem(KEYS.DATA_SOURCE, type);
-};
-
-export const getApiUrl = (): string => getSupabaseConfig().url;
 
 export const exportQCLogs = async () => {
     const logs = await fetchQCLogs(false);

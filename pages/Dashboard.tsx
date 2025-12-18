@@ -1,6 +1,7 @@
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { fetchQCLogs, getApiUrl } from '../services/db';
+// Fixed: Remove non-existent getApiUrl export from services/db
+import { fetchQCLogs } from '../services/db';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { CheckCircle2, AlertTriangle, Package, Activity, Loader2, ScanLine, FileSpreadsheet, RefreshCw, AlertCircle, Settings as SettingsIcon, ClipboardList, ShieldAlert, X, DatabaseZap } from 'lucide-react';
 import { QCStatus, QCRecord } from '../types';
