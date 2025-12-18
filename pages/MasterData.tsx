@@ -22,20 +22,17 @@ export const MasterData: React.FC = () => {
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => { 
-    // ดึงข้อมูลจาก Cache ถ้ามีอยู่แล้ว ไม่ต้องโหลดซ้ำทุกครั้งที่เข้าเมนู
+    // โหลดครั้งเดียวตอนเข้าแอป ถ้ามี Cache อยู่แล้วจะแสดงผลทันที
     loadSessionData(false); 
   }, []);
 
   const loadSessionData = async (forceUpdate = false) => {
+    if (products.length > 0 && !forceUpdate) return;
     setIsLoading(true);
     try {
         const [stats, data] = await Promise.all([
             fetchCloudStats(),
-            fetchMasterData(forceUpdate, (current, total) => {
-                const pct = Math.floor((current / (total || 1)) * 100);
-                setProgressPct(pct);
-                setProcessLabel(`Syncing: ${current.toLocaleString()} / ${total.toLocaleString()}`);
-            })
+            fetchMasterData(forceUpdate)
         ]);
         setCloudStats(stats);
         setProducts(data);
@@ -43,30 +40,26 @@ export const MasterData: React.FC = () => {
         console.warn("Load failed", e);
     } finally { 
         setIsLoading(false); 
-        setProgressPct(0);
     }
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       setIsProcessing(true);
-      setProcessLabel('1/2: Reading Excel Data...');
-      setProgressPct(0);
+      setProcessLabel('กำลังอ่านข้อมูล Excel...');
+      setProgressPct(10);
       try {
-        const newProducts = await importMasterData(e.target.files[0], (pct) => setProgressPct(Math.floor(pct * 0.3)));
+        const newProducts = await importMasterData(e.target.files[0]);
+        setProgressPct(30);
+        setProcessLabel(`กำลังอัปโหลด ${newProducts.length.toLocaleString()} รายการ...`);
         
-        setProcessLabel(`2/2: Batch Uploading ${newProducts.length.toLocaleString()} items...`);
         await bulkSaveProducts(newProducts, (pct) => {
-            const totalPct = 30 + Math.floor(pct * 0.7);
-            setProgressPct(totalPct);
+            setProgressPct(30 + Math.floor(pct * 0.7));
         });
 
         await loadSessionData(true);
-        
-        setTimeout(() => {
-            setIsProcessing(false);
-            alert(`✅ นำเข้าข้อมูลสำเร็จ!\nบันทึกขึ้นระบบ Cloud เรียบร้อยแล้ว`);
-        }, 500);
+        setIsProcessing(false);
+        alert(`✅ นำเข้าสำเร็จ!`);
       } catch (err: any) { 
         alert('เกิดข้อผิดพลาด: ' + err.message); 
         setIsProcessing(false);
@@ -78,19 +71,15 @@ export const MasterData: React.FC = () => {
 
   const handleSyncToCloud = async () => {
       if (products.length === 0) return;
-      if (!confirm(`ต้องการซิงค์สินค้า ${products.length.toLocaleString()} รายการปัจจุบันขึ้น Cloud หรือไม่?`)) return;
-      
       setIsProcessing(true);
-      setProcessLabel('Syncing Batch to Cloud...');
-      setProgressPct(0);
-      
+      setProcessLabel('กำลังซิงค์ข้อมูลกับ Cloud...');
       try {
-          await bulkSaveProducts(products, (pct) => setProgressPct(pct));
+          await bulkSaveProducts(products);
           await loadSessionData(true);
           setIsProcessing(false);
-          alert('✅ ซิงค์ข้อมูลขึ้น Cloud สำเร็จ!');
+          alert('✅ ซิงค์ข้อมูลสำเร็จ!');
       } catch (e: any) { 
-          alert(`ไม่สามารถบันทึกข้อมูลได้: ${e.message}`); 
+          alert(`ไม่สามารถบันทึกได้: ${e.message}`); 
           setIsProcessing(false);
       }
   };
@@ -111,15 +100,14 @@ export const MasterData: React.FC = () => {
   };
 
   const handleClearData = async () => {
-    if (confirm("⚠️ ยืนยันการล้างข้อมูลทั้งหมดบน Cloud?")) {
+    if (confirm("⚠️ ต้องการล้างข้อมูลทั้งหมด?")) {
         setIsProcessing(true);
-        setProcessLabel('Clearing Cloud Database...');
         try {
             await clearAllCloudData();
             setProducts([]);
             setCloudStats({ remaining: 0, checked: 0, total: 0 });
             setIsProcessing(false);
-            alert("ล้างข้อมูลเรียบร้อยแล้ว");
+            alert("ล้างข้อมูลเรียบร้อย");
         } catch (e: any) {
             alert("ล้มเหลว: " + e.message);
             setIsProcessing(false);
@@ -148,42 +136,28 @@ export const MasterData: React.FC = () => {
   return (
     <div className="space-y-6 pb-24 animate-fade-in relative min-h-screen">
       
-      {/* Progress Overlay */}
+      {/* Loading Progress Overlay */}
       {isProcessing && (
-          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-gray-900/60 backdrop-blur-xl animate-fade-in">
-              <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-10 w-full max-w-sm shadow-2xl border border-white/10 flex flex-col items-center gap-8 animate-slide-up text-center">
-                  <div className="relative">
-                      <div className="w-32 h-32 rounded-full border-4 border-gray-100 dark:border-gray-700 flex items-center justify-center">
-                          <span className="text-2xl font-black text-pastel-blueDark dark:text-pastel-blue">{progressPct}%</span>
-                          <svg className="absolute inset-0 w-32 h-32 transform -rotate-90">
-                              <circle
-                                cx="64" cy="64" r="58"
-                                stroke="currentColor" strokeWidth="8"
-                                fill="transparent"
-                                strokeDasharray={2 * Math.PI * 58}
-                                strokeDashoffset={2 * Math.PI * 58 * (1 - progressPct / 100)}
-                                strokeLinecap="round"
-                                className="text-pastel-blueDark transition-all duration-300"
-                              />
-                          </svg>
-                      </div>
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-gray-900/60 backdrop-blur-xl">
+              <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-10 w-full max-w-sm shadow-2xl flex flex-col items-center gap-8 animate-slide-up text-center">
+                  <div className="w-24 h-24 rounded-full border-4 border-pastel-blueDark border-t-transparent animate-spin flex items-center justify-center">
+                    <span className="text-sm font-black text-pastel-blueDark">{progressPct}%</span>
                   </div>
                   <div className="space-y-2">
-                      <h3 className="text-lg font-bold text-gray-800 dark:text-white leading-tight">{processLabel}</h3>
-                      <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em] animate-pulse">Max Load Limit: 1,000 Items</p>
+                      <h3 className="text-lg font-bold text-gray-800 dark:text-white">{processLabel}</h3>
                   </div>
               </div>
           </div>
       )}
 
-      {/* System Health / Live Stats Header */}
+      {/* Cloud Inventory Stats Header */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
             <div className="p-4 bg-pastel-blue/50 dark:bg-gray-700 rounded-3xl text-pastel-blueDark">
                 <Database size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">คลังสินค้า (Cloud)</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">คลังสินค้า (Cloud Inventory)</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()} <span className="text-xs font-normal text-gray-400">Items</span></p>
             </div>
         </div>
@@ -192,8 +166,8 @@ export const MasterData: React.FC = () => {
                 <Server size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">QC Checked</p>
-                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()} <span className="text-xs font-normal text-gray-400">qc check</span></p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">ตรวจเสร็จแล้ว (QC Done)</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()} <span className="text-xs font-normal text-gray-400">Records</span></p>
             </div>
         </div>
       </div>
@@ -205,33 +179,33 @@ export const MasterData: React.FC = () => {
                     <Box className="text-pastel-blueDark" size={24} />
                     คลังสินค้าหลัก
                 </h1>
-                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Real-time Cloud Inventory Management</p>
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Max View Limit: 1,000 Items</p>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => loadSessionData(true)} className="bg-gray-100 dark:bg-gray-700 p-3 rounded-2xl text-gray-500 hover:text-pastel-blueDark transition-all">
+              <button onClick={() => loadSessionData(true)} className="bg-gray-100 dark:bg-gray-700 p-3 rounded-2xl text-gray-500 hover:text-pastel-blueDark">
                 <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
               </button>
-              <button onClick={handleClearData} className="bg-red-50 dark:bg-red-900/20 p-3 rounded-2xl text-red-500 hover:bg-red-100 transition-all">
+              <button onClick={handleClearData} className="bg-red-50 dark:bg-red-900/20 p-3 rounded-2xl text-red-500">
                 <Trash2 size={20}/>
               </button>
-              <button onClick={() => { setIsEditMode(false); setEditingProduct({}); setShowModal(true); }} className="bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg shadow-blue-500/20 active:scale-95 transition-all">
+              <button onClick={() => { setIsEditMode(false); setEditingProduct({}); setShowModal(true); }} className="bg-pastel-blueDark text-white p-3 rounded-2xl shadow-lg">
                 <Plus size={24}/>
               </button>
             </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-2xl border border-gray-100 dark:border-gray-700">
-            <label className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-green-200 text-green-700 dark:text-green-400 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight cursor-pointer shadow-sm active:scale-95 transition-all">
+        <div className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
+            <label className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-green-200 text-green-700 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight cursor-pointer shadow-sm active:scale-95 transition-all">
                 <FileSpreadsheet size={14} />
-                <span>Import Excel & Sync Cloud</span>
+                <span>Import Excel</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
             </label>
-            <button onClick={handleSyncToCloud} disabled={products.length === 0} className="flex items-center gap-2 bg-pastel-blueDark text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight shadow-md active:scale-95 transition-all disabled:opacity-50">
+            <button onClick={handleSyncToCloud} disabled={products.length === 0} className="flex items-center gap-2 bg-pastel-blueDark text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight shadow-md">
                 <CloudUpload size={14} />
-                <span>Sync Cache to Cloud</span>
+                <span>Sync with Cloud</span>
             </button>
             <div className="flex-1" />
-            <button onClick={() => exportMasterData()} disabled={products.length === 0} className="p-2.5 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-xl text-gray-500 hover:text-blue-500">
+            <button onClick={() => exportMasterData()} disabled={products.length === 0} className="p-2.5 bg-white dark:bg-gray-800 border border-gray-100 rounded-xl text-gray-500">
               <FileDown size={18}/>
             </button>
         </div>
@@ -239,7 +213,7 @@ export const MasterData: React.FC = () => {
         <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
             <input 
-              type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า (แสดงผล 1,000 รายการแรก)..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
+              type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
               className="w-full pl-12 pr-4 py-4 bg-gray-50 dark:bg-gray-900 border-none focus:ring-2 focus:ring-pastel-blueDark rounded-[1.5rem] text-sm font-medium transition-all" 
             />
         </div>
@@ -248,39 +222,38 @@ export const MasterData: React.FC = () => {
       {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400 space-y-4">
               <Loader2 size={32} className="animate-spin text-pastel-blueDark" />
-              <p className="text-xs font-bold uppercase tracking-widest text-center">Loading Cloud Master: {progressPct}%</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-center">กำลังดึงข้อมูลคลังสินค้า...</p>
           </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
             <div className="overflow-x-auto no-scrollbar">
                 <table className="w-full text-left table-fixed">
-                    <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[10px] uppercase font-black tracking-widest border-b border-gray-100 dark:border-gray-700">
+                    <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[10px] uppercase font-black tracking-widest border-b border-gray-100">
                         <tr>
                             <th className="p-4 pl-8 w-32">Barcode</th>
                             <th className="p-4">Product Name</th>
                             <th className="p-4 w-24 text-center">Price</th>
-                            <th className="p-4 pr-8 w-20 text-right">Actions</th>
+                            <th className="p-4 pr-8 w-20 text-right">Action</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-gray-800">
                         {filtered.map(product => (
-                            <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors group">
+                            <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-700/20 group">
                                 <td className="p-4 pl-8">
-                                    <span className="font-mono text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded">
+                                    <span className="font-mono text-[10px] text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-900 px-2 py-1 rounded">
                                         {product.barcode}
                                     </span>
                                 </td>
                                 <td className="p-4">
-                                    <p className="text-xs font-bold text-gray-800 dark:text-white truncate leading-tight">{product.productName}</p>
-                                    <span className="text-[9px] text-gray-400 block mt-1 uppercase tracking-tighter">Lot: {product.lotNo || 'N/A'}</span>
+                                    <p className="text-xs font-bold text-gray-800 dark:text-white truncate">{product.productName}</p>
                                 </td>
                                 <td className="p-4 text-center">
                                     <span className="text-xs text-pastel-blueDark font-black">฿{product.unitPrice?.toLocaleString() || 0}</span>
                                 </td>
                                 <td className="p-4 pr-8 text-right">
                                     <div className="flex justify-end gap-3">
-                                        <button onClick={() => { setIsEditMode(true); setEditingProduct(product); setShowModal(true); }} className="text-blue-500 hover:scale-125 transition-transform"><Edit2 size={14}/></button>
-                                        <button onClick={() => setDeleteId(product.barcode)} className="text-red-500 hover:scale-125 transition-transform"><Trash2 size={14}/></button>
+                                        <button onClick={() => { setIsEditMode(true); setEditingProduct(product); setShowModal(true); }} className="text-blue-500"><Edit2 size={14}/></button>
+                                        <button onClick={() => setDeleteId(product.barcode)} className="text-red-500"><Trash2 size={14}/></button>
                                     </div>
                                 </td>
                             </tr>
@@ -304,25 +277,24 @@ export const MasterData: React.FC = () => {
                     <form onSubmit={handleSaveProduct} className="space-y-4">
                         <div className="space-y-2">
                             <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Barcode / ID</label>
-                            <input type="text" required disabled={isEditMode} value={editingProduct.barcode || ''} onChange={e => setEditingProduct({...editingProduct, barcode: e.target.value})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark" placeholder="สแกนหรือพิมพ์รหัส..." />
+                            <input type="text" required disabled={isEditMode} value={editingProduct.barcode || ''} onChange={e => setEditingProduct({...editingProduct, barcode: e.target.value})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark" />
                         </div>
                         <div className="space-y-2">
                             <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Product Name</label>
-                            <textarea required rows={3} value={editingProduct.productName || ''} onChange={e => setEditingProduct({...editingProduct, productName: e.target.value})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-medium resize-none focus:ring-2 focus:ring-pastel-blueDark" placeholder="ระบุชื่อสินค้า..." />
+                            <textarea required rows={3} value={editingProduct.productName || ''} onChange={e => setEditingProduct({...editingProduct, productName: e.target.value})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-medium resize-none focus:ring-2 focus:ring-pastel-blueDark" />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Cost (฿)</label>
-                                <input type="number" step="0.01" value={editingProduct.costPrice || ''} onChange={e => setEditingProduct({...editingProduct, costPrice: Number(e.target.value)})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-bold" placeholder="0.00" />
+                                <input type="number" step="0.01" value={editingProduct.costPrice || ''} onChange={e => setEditingProduct({...editingProduct, costPrice: Number(e.target.value)})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-bold" />
                             </div>
                             <div className="space-y-2">
                                 <label className="text-[10px] font-black uppercase text-gray-400 ml-1">Price (฿)</label>
-                                <input type="number" step="0.01" value={editingProduct.unitPrice || ''} onChange={e => setEditingProduct({...editingProduct, unitPrice: Number(e.target.value)})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm text-pastel-blueDark font-black" placeholder="0.00" />
+                                <input type="number" step="0.01" value={editingProduct.unitPrice || ''} onChange={e => setEditingProduct({...editingProduct, unitPrice: Number(e.target.value)})} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm text-pastel-blueDark font-black" />
                             </div>
                         </div>
-                        <button type="submit" className="w-full bg-pastel-blueDark text-white font-black py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all text-sm mt-4 flex items-center justify-center gap-2">
+                        <button type="submit" className="w-full bg-pastel-blueDark text-white font-black py-5 rounded-[1.5rem] shadow-xl active:scale-95 transition-all text-sm mt-4">
                             {isEditMode ? 'อัปเดตข้อมูล' : 'บันทึกลงคลัง'}
-                            <Zap size={18} fill="currentColor" />
                         </button>
                     </form>
                 </div>
@@ -334,14 +306,14 @@ export const MasterData: React.FC = () => {
           <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
              <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => setDeleteId(null)} />
              <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] p-8 shadow-2xl relative animate-slide-up max-w-xs w-full text-center">
-                 <div className="w-20 h-20 bg-red-50 dark:bg-red-900/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
+                 <div className="w-20 h-20 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-6">
                     <AlertTriangle size={40} />
                  </div>
                  <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">ยืนยันการลบ?</h3>
-                 <p className="text-gray-400 text-xs mb-8">ต้องการลบรหัส {deleteId} ออกจากฐานข้อมูลใช่หรือไม่?</p>
+                 <p className="text-gray-400 text-xs mb-8">ลบรหัส {deleteId} ใช่หรือไม่?</p>
                  <div className="flex gap-4">
-                     <button onClick={() => setDeleteId(null)} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 rounded-2xl font-bold text-sm">ยกเลิก</button>
-                     <button onClick={() => handleDelete(deleteId!)} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-bold text-sm shadow-lg shadow-red-500/20 active:scale-95 transition-all">ลบข้อมูล</button>
+                     <button onClick={() => setDeleteId(null)} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 rounded-2xl font-bold">ยกเลิก</button>
+                     <button onClick={() => handleDelete(deleteId!)} className="flex-1 py-4 bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-500/20 active:scale-95 transition-all">ลบข้อมูล</button>
                  </div>
              </div>
           </div>

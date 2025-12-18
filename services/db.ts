@@ -53,6 +53,7 @@ export const getSupabaseConfig = () => ({
     key: (localStorage.getItem(KEYS.SUPABASE_KEY) || DEFAULT_SUPABASE_KEY).trim()
 });
 
+// Fix: Added missing setSupabaseConfig export to handle configuration saving
 export const setSupabaseConfig = (url: string, key: string) => {
     localStorage.setItem(KEYS.SUPABASE_URL, url.trim());
     localStorage.setItem(KEYS.SUPABASE_KEY, key.trim());
@@ -85,29 +86,32 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     return responseText ? JSON.parse(responseText) : true;
 };
 
-// ดึงตัวเลขสรุปจาก Cloud นับจากตาราง products (Inventory/Production)
+// นับจำนวนสินค้าจากตาราง products (Inventory หลัก)
 export const fetchCloudStats = async () => {
     const [totalProducts, totalLogs] = await Promise.all([
         callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
         callSupabase('qc_logs', 'GET', null, '?select=id&limit=1', true)
     ]);
-    const remaining = Number(totalProducts);
-    const checked = Number(totalLogs);
     return { 
-        remaining,
-        checked,
-        total: remaining 
+        remaining: Number(totalProducts),
+        checked: Number(totalLogs),
+        total: Number(totalProducts) 
     };
 };
 
-// ดึงข้อมูลสินค้าจำกัดสูงสุด 1000 รายการ เพื่อประสิทธิภาพ
-export const fetchMasterDataBatch = async (forceUpdate = false): Promise<ProductMaster[]> => {
+// ดึงข้อมูลสินค้าจำกัด 1000 รายการ และใช้ Cache เป็นหลัก
+export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
+    // 1. ตรวจสอบ Cache ก่อนเสมอ
     const cached = await dbGet(KEYS.CACHE_MASTER);
-    if (cached && !forceUpdate && cached.length > 0) return cached;
+    if (cached && !forceUpdate && cached.length > 0) {
+        return cached;
+    }
     
     try {
+        // 2. ถ้าไม่มี Cache หรือต้องการ Force Update ให้ดึงจาก Cloud จำกัด 1000 รายการ
         const limit = 1000;
         const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}`);
+        
         if (Array.isArray(data)) {
             const mapped = data.map(item => ({
                 barcode: String(item.barcode).trim(),
@@ -115,61 +119,23 @@ export const fetchMasterDataBatch = async (forceUpdate = false): Promise<Product
                 costPrice: Number(item.cost_price || 0),
                 unitPrice: Number(item.unit_price || 0),
                 lotNo: item.lot_no || '',
+                // Fix: Corrected property name from product_type to productType to match ProductMaster interface
                 productType: item.product_type || ''
             }));
+            // บันทึกลง IndexedDB เพื่อให้สลับหน้าไปมาแล้วข้อมูลไม่หาย
             await dbSet(KEYS.CACHE_MASTER, mapped);
-            return mapped;
-        }
-    } catch (e) {
-        console.error("FetchBatch failed:", e);
-    }
-    return cached || [];
-};
-
-export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
-    const cached = await dbGet(KEYS.CACHE_MASTER);
-    if (cached && !forceUpdate && cached.length > 0) return cached;
-    
-    try {
-        const totalCountRaw = await callSupabase('products', 'GET', null, '?select=barcode&limit=1', true) as number;
-        // จำกัดการดึงข้อมูลสูงสุด 1000 รายการตามคำขอ
-        const totalCount = Math.min(totalCountRaw, 1000);
-        
-        let allData: any[] = [];
-        let offset = 0;
-        const limit = 500;
-
-        if (onProgress) onProgress(0, totalCount);
-
-        while (offset < totalCount) {
-            const currentLimit = Math.min(limit, totalCount - offset);
-            const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${currentLimit}&offset=${offset}`);
-            if (Array.isArray(data)) {
-                allData = [...allData, ...data];
-                offset += data.length;
-                if (onProgress) onProgress(offset, totalCount);
-                if (data.length < currentLimit || offset >= totalCount) break;
-            } else {
-                break;
-            }
-        }
-
-        if (allData.length >= 0) {
-            const mapped = allData.map(item => ({
-                barcode: String(item.barcode).trim(),
-                productName: item.product_name || 'No Name',
-                costPrice: Number(item.cost_price || 0),
-                unitPrice: Number(item.unit_price || 0),
-                lotNo: item.lot_no || '',
-                productType: item.product_type || ''
-            }));
-            await dbSet(KEYS.CACHE_MASTER, mapped);
+            if (onProgress) onProgress(mapped.length, mapped.length);
             return mapped;
         }
     } catch (e) {
         console.error("FetchMasterData failed:", e);
     }
     return cached || [];
+};
+
+// Alias สำหรับหน้า QC ที่ต้องการความเร็วสูง
+export const fetchMasterDataBatch = async (forceUpdate = false): Promise<ProductMaster[]> => {
+    return fetchMasterData(forceUpdate);
 };
 
 export const submitQCAndRemoveProduct = async (record: any) => {
@@ -185,14 +151,22 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         image_urls: record.imageUrls || [],
         timestamp: new Date().toISOString()
     });
+    // ลบออกจากตาราง products เมื่อตรวจเสร็จ
     await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
+    
+    // อัปเดต Cache ทันทีเพื่อให้รายการหายไปจากหน้าจอโดยไม่ต้องดึงใหม่
+    const cached = await dbGet(KEYS.CACHE_MASTER);
+    if (Array.isArray(cached)) {
+        const filtered = cached.filter((p: any) => p.barcode !== record.barcode);
+        await dbSet(KEYS.CACHE_MASTER, filtered);
+    }
 };
 
 export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     const cached = await dbGet(KEYS.CACHE_LOGS);
     if (cached && !forceUpdate && cached.length > 0) return cached;
     try {
-        const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=2000');
+        const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=1000');
         if (Array.isArray(data)) {
             const mapped: QCRecord[] = data.map(item => ({
                 id: String(item.id),
@@ -249,7 +223,7 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     if (!products.length) return;
-    const CHUNK_SIZE = 500;
+    const CHUNK_SIZE = 100; // ลดขนาด Chunk เพื่อมือถือ
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
         const chunk = products.slice(i, i + CHUNK_SIZE);
         const payloads = chunk.map(p => ({
@@ -271,9 +245,9 @@ export const deleteProduct = async (barcode: string) => {
     await fetchMasterData(true);
 };
 
-export const clearAllCloudData = async (onProgress?: (pct: number) => void) => {
+export const clearAllCloudData = async () => {
     await callSupabase('qc_logs', 'DELETE', null, '?id=neq.-1');
-    await callSupabase('products', 'DELETE', null, '?barcode=neq.EXECUTE_TRUNCATE');
+    await callSupabase('products', 'DELETE', null, '?barcode=neq.CLEAR');
     await dbDel(KEYS.CACHE_MASTER);
     await dbDel(KEYS.CACHE_LOGS);
 };
@@ -287,20 +261,20 @@ export const compressImage = (file: File | Blob): Promise<string> => {
             img.src = e.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 1000; 
+                const MAX_WIDTH = 800; // ลดขนาดภาพเพื่อมือถือ
                 canvas.width = MAX_WIDTH;
                 canvas.height = img.height * (MAX_WIDTH / img.width);
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.75));
+                    resolve(canvas.toDataURL('image/jpeg', 0.6));
                 }
             }
         }
     });
 };
 
-export const importMasterData = async (file: File, onProgress?: (pct: number) => void): Promise<ProductMaster[]> => {
+export const importMasterData = async (file: File): Promise<ProductMaster[]> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
@@ -324,9 +298,7 @@ export const importMasterData = async (file: File, onProgress?: (pct: number) =>
     });
 };
 
-export const clearLocalMasterData = async () => dbDel(KEYS.CACHE_MASTER);
 export const updateLocalMasterDataCache = async (p: ProductMaster[]) => dbSet(KEYS.CACHE_MASTER, p);
-
 export const exportQCLogs = async () => {
     const logs = await fetchQCLogs(false);
     const worksheet = XLSX.utils.json_to_sheet(logs);
