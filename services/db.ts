@@ -122,6 +122,7 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
         const limit = 1000;
         let hasMore = true;
 
+        // Fetch loop to handle large datasets (like 23,000+ items)
         while (hasMore) {
             const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}&offset=${offset}`);
             if (Array.isArray(data)) {
@@ -151,6 +152,84 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
     } catch (e) {
         console.error("Full fetchMasterData failed:", e);
     }
+    return cached || [];
+};
+
+export const deleteProduct = async (barcode: string) => {
+    const result = await callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
+    return result;
+};
+
+export const saveQCRecord = async (record: any) => {
+    const payload = {
+        barcode: String(record.barcode).trim(),
+        product_name: record.productName,
+        cost_price: record.costPrice,
+        selling_price: record.sellingPrice,
+        status: record.status,
+        reason: record.reason,
+        remark: record.remark,
+        inspector_id: record.inspectorId,
+        image_urls: record.imageUrls || [],
+        timestamp: new Date().toISOString()
+    };
+    const result = await callSupabase('qc_logs', 'POST', payload);
+    return result;
+};
+
+/**
+ * บันทึกผล QC และลบสินค้าออกจาก Master Table ทันที
+ */
+export const submitQCAndRemoveProduct = async (record: any) => {
+    // 1. Save Log
+    await saveQCRecord(record);
+    // 2. Delete from Product Table
+    await deleteProduct(record.barcode);
+    // 3. Optional: Sync local cache for logs but NOT for master (master needs to be updated by UI or force)
+    await fetchQCLogs(true);
+};
+
+export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
+    const cached = await dbGet(KEYS.CACHE_LOGS);
+    if (cached && !forceUpdate) return cached;
+    try {
+        let allLogs: any[] = [];
+        let offset = 0;
+        const limit = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+            const data = await callSupabase('qc_logs', 'GET', null, `?select=*&order=timestamp.desc&limit=${limit}&offset=${offset}`);
+            if (Array.isArray(data)) {
+                allLogs = [...allLogs, ...data];
+                if (data.length < limit || allLogs.length >= 5000) { 
+                    hasMore = false;
+                } else {
+                    offset += limit;
+                }
+            } else {
+                hasMore = false;
+            }
+        }
+
+        if (allLogs.length > 0) {
+            const mapped: QCRecord[] = allLogs.map(item => ({
+                id: String(item.id),
+                barcode: item.barcode,
+                productName: item.product_name,
+                costPrice: Number(item.cost_price),
+                sellingPrice: Number(item.selling_price),
+                status: item.status as QCStatus,
+                reason: item.reason,
+                remark: item.remark,
+                inspectorId: item.inspector_id,
+                imageUrls: Array.isArray(item.image_urls) ? item.image_urls : [],
+                timestamp: item.timestamp
+            }));
+            await dbSet(KEYS.CACHE_LOGS, mapped);
+            return mapped;
+        }
+    } catch (e) {}
     return cached || [];
 };
 
@@ -194,12 +273,6 @@ export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (
     return true;
 };
 
-export const deleteProduct = async (barcode: string) => {
-    const result = await callSupabase('products', 'DELETE', null, `?barcode=eq.${barcode}`);
-    await fetchMasterData(true);
-    return result;
-};
-
 export const clearAllCloudData = async (onProgress?: (pct: number) => void) => {
     try {
         if (onProgress) onProgress(10);
@@ -218,68 +291,6 @@ export const clearAllCloudData = async (onProgress?: (pct: number) => void) => {
         console.error("Cloud clear failed:", e);
         throw new Error("ลบข้อมูลบน Cloud ไม่สำเร็จ กรุณาตรวจสอบสิทธิ์การเข้าถึง");
     }
-};
-
-export const saveQCRecord = async (record: any) => {
-    const payload = {
-        barcode: String(record.barcode).trim(),
-        product_name: record.productName,
-        cost_price: record.costPrice,
-        selling_price: record.sellingPrice,
-        status: record.status,
-        reason: record.reason,
-        remark: record.remark,
-        inspector_id: record.inspectorId,
-        image_urls: record.imageUrls || [],
-        timestamp: new Date().toISOString()
-    };
-    const result = await callSupabase('qc_logs', 'POST', payload);
-    await fetchQCLogs(true);
-    return result;
-};
-
-export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
-    const cached = await dbGet(KEYS.CACHE_LOGS);
-    if (cached && !forceUpdate) return cached;
-    try {
-        let allLogs: any[] = [];
-        let offset = 0;
-        const limit = 1000;
-        let hasMore = true;
-
-        while (hasMore) {
-            const data = await callSupabase('qc_logs', 'GET', null, `?select=*&order=timestamp.desc&limit=${limit}&offset=${offset}`);
-            if (Array.isArray(data)) {
-                allLogs = [...allLogs, ...data];
-                if (data.length < limit || allLogs.length >= 5000) { // Limit to 5k for safety
-                    hasMore = false;
-                } else {
-                    offset += limit;
-                }
-            } else {
-                hasMore = false;
-            }
-        }
-
-        if (allLogs.length > 0) {
-            const mapped: QCRecord[] = allLogs.map(item => ({
-                id: String(item.id),
-                barcode: item.barcode,
-                productName: item.product_name,
-                costPrice: Number(item.cost_price),
-                sellingPrice: Number(item.selling_price),
-                status: item.status as QCStatus,
-                reason: item.reason,
-                remark: item.remark,
-                inspectorId: item.inspector_id,
-                imageUrls: Array.isArray(item.image_urls) ? item.image_urls : [],
-                timestamp: item.timestamp
-            }));
-            await dbSet(KEYS.CACHE_LOGS, mapped);
-            return mapped;
-        }
-    } catch (e) {}
-    return cached || [];
 };
 
 export const compressImage = (file: File | Blob): Promise<string> => {

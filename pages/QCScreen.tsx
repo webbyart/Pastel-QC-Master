@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { fetchMasterData, saveQCRecord, compressImage } from '../services/db';
+import { fetchMasterData, submitQCAndRemoveProduct, compressImage, updateLocalMasterDataCache } from '../services/db';
 import { ProductMaster, QCStatus } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { Scan, Camera, X, CheckCircle2, AlertTriangle, Loader2, Sparkles, Zap, AlertCircle, Trash2, Maximize2, Cpu, RefreshCw, Search } from 'lucide-react';
@@ -41,7 +41,7 @@ export const QCScreen: React.FC = () => {
   const html5QrCodeRef = useRef<Html5Qrcode | null>(null);
 
   useEffect(() => {
-    // Fetch full data for accurate matching
+    // โหลดข้อมูลทั้งหมด 23,000+ รายการเพื่อการค้นหาที่แม่นยำ
     fetchMasterData(false).then(setCachedProducts);
   }, []);
 
@@ -95,7 +95,9 @@ export const QCScreen: React.FC = () => {
         const base64Data = base64.split(',')[1];
         
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-        const prompt = `จากภาพนี้ จงค้นหาข้อมูลสินค้า (Barcode, QR, หรือชื่อสินค้า) และส่งกลับมาเป็น JSON: {"barcode": "found_code", "product_name": "detected_name"}`;
+        const prompt = `Identify the product identification from this image. 
+        Focus on Barcodes, SKU labels, or Product Names.
+        Return ONLY a JSON object: {"barcode": "ID_if_found", "product_name": "name_if_found"}`;
 
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
@@ -105,28 +107,24 @@ export const QCScreen: React.FC = () => {
 
         const result = JSON.parse(response.text || '{}');
         
-        // Search by AI identified barcode
+        let found: ProductMaster | undefined;
+
         if (result.barcode) {
-            const found = cachedProducts.find(p => p.barcode.trim() === String(result.barcode).trim());
-            if (found) {
-                stopScanner();
-                applyProduct(found);
-                return;
-            }
+            found = cachedProducts.find(p => p.barcode.trim() === String(result.barcode).trim());
         }
 
-        // Search by AI identified name
-        if (result.product_name) {
+        if (!found && result.product_name) {
             const searchName = String(result.product_name).toLowerCase();
-            const found = cachedProducts.find(p => p.productName.toLowerCase().includes(searchName));
-            if (found) {
-                stopScanner();
-                applyProduct(found);
-                return;
-            }
+            found = cachedProducts.find(p => p.productName.toLowerCase().includes(searchName));
         }
         
-        setErrors({ scan: "AI วิเคราะห์แล้วไม่พบสินค้าที่ตรงกันในระบบ" });
+        if (found) {
+            stopScanner();
+            applyProduct(found);
+            return;
+        }
+        
+        setErrors({ scan: "AI วิเคราะห์แล้วไม่พบรหัสสินค้าที่ตรงกับฐานข้อมูล" });
     } catch (e) {
         setErrors({ scan: "AI วิเคราะห์ล้มเหลว กรุณาลองใหม่อีกครั้ง" });
     } finally {
@@ -154,11 +152,12 @@ export const QCScreen: React.FC = () => {
       stopScanner();
       applyProduct(found);
     } else {
-      // Automatic Fallback to AI Vision if not found
+      // Automatic Fallback to AI Vision if not found via normal scan
       if (showScanner) {
+        setErrors({ scan: "ไม่พบรหัสในระบบ กำลังเรียกใช้ AI Vision..." });
         await analyzeWithAi();
       } else {
-        setErrors({ scan: `ไม่พบรหัสสินค้า "${cleanCode}" ในคลังข้อมูล` });
+        setErrors({ scan: `ไม่พบรหัส "${cleanCode}" ในคลังสินค้า` });
       }
     }
   };
@@ -175,7 +174,7 @@ export const QCScreen: React.FC = () => {
 
     setIsSaving(true);
     try {
-        await saveQCRecord({
+        const record = {
             barcode: product.barcode,
             productName: product.productName,
             costPrice: product.costPrice,
@@ -185,19 +184,28 @@ export const QCScreen: React.FC = () => {
             remark,
             imageUrls: images,
             inspectorId: user.username,
-        });
+        };
+
+        // 1. Submit to Log & Delete from Master in Cloud
+        await submitQCAndRemoveProduct(record);
+
+        // 2. Update Local State (Remove product from local list so it doesn't show up again)
+        const updatedList = cachedProducts.filter(p => p.barcode !== product.barcode);
+        setCachedProducts(updatedList);
+        await updateLocalMasterDataCache(updatedList);
+
         setStep('scan');
         setBarcode('');
         setProduct(null);
-        alert('✅ บันทึกข้อมูลสำเร็จ!');
+        alert('✅ บันทึกผลสำเร็จ และนำสินค้าออกจากคลังแล้ว');
     } catch (e: any) { 
-        alert(`❌ ผิดพลาด: ${e.message}`); 
+        alert(`❌ เกิดข้อผิดพลาด: ${e.message}`); 
     } finally { setIsSaving(false); }
   };
 
   return (
     <div className="max-w-2xl mx-auto pb-24 px-4">
-      {/* AI Analyzing Feedback Overlay */}
+      {/* AI Analyzing Visual Feedback */}
       {isAiProcessing && (
         <div className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-gray-900/80 backdrop-blur-md animate-fade-in text-center p-8">
             <div className="bg-white dark:bg-gray-800 p-10 rounded-[3rem] shadow-2xl flex flex-col items-center gap-6 animate-slide-up border border-white/20">
@@ -207,10 +215,7 @@ export const QCScreen: React.FC = () => {
                 </div>
                 <div className="space-y-1">
                     <h3 className="text-xl font-black text-gray-800 dark:text-white uppercase tracking-tight">AI Analyzing Image...</h3>
-                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">Smart ID in progress</p>
-                </div>
-                <div className="w-full h-1 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-pastel-blueDark animate-[loading_2s_ease-in-out_infinite]" style={{ width: '40%' }}></div>
+                    <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.2em]">Searching 23,000+ items</p>
                 </div>
             </div>
         </div>
@@ -224,7 +229,7 @@ export const QCScreen: React.FC = () => {
 
           <div className="text-center">
             <h2 className="text-3xl font-display font-bold text-gray-800 dark:text-white">QC SCANNER</h2>
-            <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] mt-1">Ready for 23,188 Items</p>
+            <p className="text-[10px] text-gray-400 font-black uppercase tracking-[0.3em] mt-1">คลังคงเหลือ: {cachedProducts.length.toLocaleString()} รายการ</p>
           </div>
           
           <div className="w-full max-w-sm space-y-4">
@@ -325,7 +330,7 @@ export const QCScreen: React.FC = () => {
                 onClick={handleSubmit} disabled={isSaving} 
                 className="w-full py-6 rounded-[2.5rem] bg-pastel-blueDark text-white font-bold text-lg shadow-xl shadow-blue-500/30 active:scale-95 transition-all flex items-center justify-center gap-4 disabled:opacity-50"
               >
-                  {isSaving ? <Loader2 className="animate-spin" /> : <>บันทึกผลตรวจสอบ (Submit) <Zap size={20} fill="currentColor" /></>}
+                  {isSaving ? <Loader2 className="animate-spin" /> : <>บันทึก และนำออกจากคลัง (Submit) <Zap size={20} fill="currentColor" /></>}
               </button>
           </div>
         </div>
