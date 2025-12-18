@@ -115,10 +115,29 @@ export const testApiConnection = async (url: string, key: string): Promise<{succ
 export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaster[]> => {
     const cached = await dbGet(KEYS.CACHE_MASTER);
     if (cached && !forceUpdate) return cached;
+    
     try {
-        const data = await callSupabase('products', 'GET', null, '?select=*&order=barcode.asc');
-        if (Array.isArray(data)) {
-            const mapped = data.map(item => ({
+        let allData: any[] = [];
+        let offset = 0;
+        const limit = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+            const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}&offset=${offset}`);
+            if (Array.isArray(data)) {
+                allData = [...allData, ...data];
+                if (data.length < limit) {
+                    hasMore = false;
+                } else {
+                    offset += limit;
+                }
+            } else {
+                hasMore = false;
+            }
+        }
+
+        if (allData.length > 0) {
+            const mapped = allData.map(item => ({
                 barcode: String(item.barcode).trim(),
                 productName: item.product_name,
                 costPrice: Number(item.cost_price),
@@ -129,7 +148,9 @@ export const fetchMasterData = async (forceUpdate = false): Promise<ProductMaste
             await dbSet(KEYS.CACHE_MASTER, mapped);
             return mapped;
         }
-    } catch (e) {}
+    } catch (e) {
+        console.error("Full fetchMasterData failed:", e);
+    }
     return cached || [];
 };
 
@@ -181,15 +202,12 @@ export const deleteProduct = async (barcode: string) => {
 
 export const clearAllCloudData = async (onProgress?: (pct: number) => void) => {
     try {
-        // Step 1: ลบประวัติการตรวจ (qc_logs)
         if (onProgress) onProgress(10);
         await callSupabase('qc_logs', 'DELETE', null, '?id=neq.-1');
         
-        // Step 2: ลบสินค้า (products)
         if (onProgress) onProgress(50);
         await callSupabase('products', 'DELETE', null, '?barcode=neq.EXECUTE_TRUNCATE');
         
-        // Step 3: ล้าง Cache ในเครื่อง
         if (onProgress) onProgress(80);
         await dbDel(KEYS.CACHE_MASTER);
         await dbDel(KEYS.CACHE_LOGS);
@@ -224,9 +242,27 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
     const cached = await dbGet(KEYS.CACHE_LOGS);
     if (cached && !forceUpdate) return cached;
     try {
-        const data = await callSupabase('qc_logs', 'GET', null, '?select=*&order=timestamp.desc&limit=1000');
-        if (Array.isArray(data)) {
-            const mapped: QCRecord[] = data.map(item => ({
+        let allLogs: any[] = [];
+        let offset = 0;
+        const limit = 1000;
+        let hasMore = true;
+
+        while (hasMore) {
+            const data = await callSupabase('qc_logs', 'GET', null, `?select=*&order=timestamp.desc&limit=${limit}&offset=${offset}`);
+            if (Array.isArray(data)) {
+                allLogs = [...allLogs, ...data];
+                if (data.length < limit || allLogs.length >= 5000) { // Limit to 5k for safety
+                    hasMore = false;
+                } else {
+                    offset += limit;
+                }
+            } else {
+                hasMore = false;
+            }
+        }
+
+        if (allLogs.length > 0) {
+            const mapped: QCRecord[] = allLogs.map(item => ({
                 id: String(item.id),
                 barcode: item.barcode,
                 productName: item.product_name,
