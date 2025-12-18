@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
-import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats } from '../services/db';
+import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats, dbGet } from '../services/db';
 import { ProductMaster } from '../types';
-import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server } from 'lucide-react';
+import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, AlertCircle } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [cloudStats, setCloudStats] = useState({ remaining: 0, checked: 0, total: 0 });
   
   // Progress States
@@ -21,23 +21,37 @@ export const MasterData: React.FC = () => {
   const [editingProduct, setEditingProduct] = useState<Partial<ProductMaster>>({});
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
+  // Initial Load from Cache immediately
   useEffect(() => { 
-    // โหลดครั้งเดียวตอนเข้าแอป ถ้ามี Cache อยู่แล้วจะแสดงผลทันที
-    loadSessionData(false); 
+    const init = async () => {
+        // ขั้นแรก: ดึงข้อมูลจาก IndexedDB มาแสดงทันที ไม่ต้องรอ Cloud
+        try {
+            const cached = await dbGet('qc_cache_master');
+            if (cached && cached.length > 0) {
+                setProducts(cached);
+            }
+        } catch (e) { console.warn("Cache load failed", e); }
+
+        // ขั้นต่อมา: โหลด Stats และอัปเดตข้อมูลจาก Cloud ในเบื้องหลัง
+        loadSessionData(false); 
+    };
+    init();
   }, []);
 
   const loadSessionData = async (forceUpdate = false) => {
-    if (products.length > 0 && !forceUpdate) return;
-    setIsLoading(true);
+    // ถ้ามีข้อมูลในหน้าจอแล้วและไม่ใช่การกด Refresh บังคับ ไม่ต้องเปิด Spinner ใหญ่
+    if (products.length === 0 || forceUpdate) setIsLoading(true);
+    
     try {
-        const [stats, data] = await Promise.all([
-            fetchCloudStats(),
-            fetchMasterData(forceUpdate)
-        ]);
-        setCloudStats(stats);
-        setProducts(data);
+        // แยกการโหลดเพื่อให้ Stats มาก่อนได้
+        fetchCloudStats().then(stats => setCloudStats(stats));
+        
+        const data = await fetchMasterData(forceUpdate);
+        if (data && data.length > 0) {
+            setProducts(data);
+        }
     } catch (e) {
-        console.warn("Load failed", e);
+        console.warn("Load Cloud failed", e);
     } finally { 
         setIsLoading(false); 
     }
@@ -102,6 +116,7 @@ export const MasterData: React.FC = () => {
   const handleClearData = async () => {
     if (confirm("⚠️ ต้องการล้างข้อมูลทั้งหมด?")) {
         setIsProcessing(true);
+        setProcessLabel('กำลังล้างข้อมูล...');
         try {
             await clearAllCloudData();
             setProducts([]);
@@ -151,14 +166,14 @@ export const MasterData: React.FC = () => {
       )}
 
       {/* Cloud Inventory Stats Header */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-2 gap-4">
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
             <div className="p-4 bg-pastel-blue/50 dark:bg-gray-700 rounded-3xl text-pastel-blueDark">
                 <Database size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">คลังสินค้า (Cloud Inventory)</p>
-                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()} <span className="text-xs font-normal text-gray-400">Items</span></p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">คลังสินค้า (Cloud)</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()}</p>
             </div>
         </div>
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
@@ -166,8 +181,8 @@ export const MasterData: React.FC = () => {
                 <Server size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">ตรวจเสร็จแล้ว (QC Done)</p>
-                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()} <span className="text-xs font-normal text-gray-400">Records</span></p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">ตรวจแล้ว (QC)</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()}</p>
             </div>
         </div>
       </div>
@@ -179,10 +194,10 @@ export const MasterData: React.FC = () => {
                     <Box className="text-pastel-blueDark" size={24} />
                     คลังสินค้าหลัก
                 </h1>
-                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Max View Limit: 1,000 Items</p>
+                <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">Local Cache Enabled</p>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => loadSessionData(true)} className="bg-gray-100 dark:bg-gray-700 p-3 rounded-2xl text-gray-500 hover:text-pastel-blueDark">
+              <button onClick={() => loadSessionData(true)} className="bg-gray-100 dark:bg-gray-700 p-3 rounded-2xl text-gray-500 hover:text-pastel-blueDark active:bg-gray-200 transition-all">
                 <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
               </button>
               <button onClick={handleClearData} className="bg-red-50 dark:bg-red-900/20 p-3 rounded-2xl text-red-500">
@@ -197,12 +212,12 @@ export const MasterData: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2 p-2 bg-gray-50 dark:bg-gray-900/50 rounded-2xl">
             <label className="flex items-center gap-2 bg-white dark:bg-gray-800 border border-green-200 text-green-700 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight cursor-pointer shadow-sm active:scale-95 transition-all">
                 <FileSpreadsheet size={14} />
-                <span>Import Excel</span>
+                <span>Excel Import</span>
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
             </label>
             <button onClick={handleSyncToCloud} disabled={products.length === 0} className="flex items-center gap-2 bg-pastel-blueDark text-white px-4 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-tight shadow-md">
                 <CloudUpload size={14} />
-                <span>Sync with Cloud</span>
+                <span>Sync Cloud</span>
             </button>
             <div className="flex-1" />
             <button onClick={() => exportMasterData()} disabled={products.length === 0} className="p-2.5 bg-white dark:bg-gray-800 border border-gray-100 rounded-xl text-gray-500">
@@ -222,8 +237,14 @@ export const MasterData: React.FC = () => {
       {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400 space-y-4">
               <Loader2 size={32} className="animate-spin text-pastel-blueDark" />
-              <p className="text-xs font-bold uppercase tracking-widest text-center">กำลังดึงข้อมูลคลังสินค้า...</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-center">กำลังตรวจสอบคลังสินค้า...</p>
           </div>
+      ) : products.length === 0 ? (
+        <div className="p-20 text-center flex flex-col items-center gap-4 text-gray-300">
+            <AlertCircle size={64} className="opacity-20" />
+            <p className="font-bold text-sm uppercase tracking-widest">ไม่พบสินค้าในระบบ</p>
+            <p className="text-xs">กรุณานำเข้าไฟล์ Excel หรือซิงค์กับ Cloud</p>
+        </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
             <div className="overflow-x-auto no-scrollbar">

@@ -53,7 +53,6 @@ export const getSupabaseConfig = () => ({
     key: (localStorage.getItem(KEYS.SUPABASE_KEY) || DEFAULT_SUPABASE_KEY).trim()
 });
 
-// Fix: Added missing setSupabaseConfig export to handle configuration saving
 export const setSupabaseConfig = (url: string, key: string) => {
     localStorage.setItem(KEYS.SUPABASE_URL, url.trim());
     localStorage.setItem(KEYS.SUPABASE_KEY, key.trim());
@@ -69,71 +68,84 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         'Prefer': countOnly ? 'count=exact' : (method === 'POST' ? 'resolution=merge-duplicates, return=minimal' : 'return=representation')
     };
 
-    const options: RequestInit = { method, headers };
+    const options: RequestInit = { method, headers, mode: 'cors' };
     if (body) options.body = JSON.stringify(body);
 
-    const res = await fetch(endpoint, options);
-    if (!res.ok) throw new Error(`Supabase Error ${res.status}`);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout for mobile
+    options.signal = controller.signal;
 
-    if (countOnly) {
-        const range = res.headers.get('content-range');
-        if (range) return parseInt(range.split('/')[1]);
-        return 0;
+    try {
+        const res = await fetch(endpoint, options);
+        clearTimeout(timeoutId);
+        if (!res.ok) throw new Error(`Supabase Error ${res.status}`);
+
+        if (countOnly) {
+            const range = res.headers.get('content-range');
+            if (range) return parseInt(range.split('/')[1]);
+            return 0;
+        }
+
+        if (res.status === 204 || res.status === 201) return true;
+        const responseText = await res.text();
+        return responseText ? JSON.parse(responseText) : true;
+    } catch (err) {
+        clearTimeout(timeoutId);
+        throw err;
     }
-
-    if (res.status === 204 || res.status === 201) return true;
-    const responseText = await res.text();
-    return responseText ? JSON.parse(responseText) : true;
 };
 
-// นับจำนวนสินค้าจากตาราง products (Inventory หลัก)
 export const fetchCloudStats = async () => {
-    const [totalProducts, totalLogs] = await Promise.all([
-        callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
-        callSupabase('qc_logs', 'GET', null, '?select=id&limit=1', true)
-    ]);
-    return { 
-        remaining: Number(totalProducts),
-        checked: Number(totalLogs),
-        total: Number(totalProducts) 
-    };
+    try {
+        const [totalProducts, totalLogs] = await Promise.all([
+            callSupabase('products', 'GET', null, '?select=barcode&limit=1', true),
+            callSupabase('qc_logs', 'GET', null, '?select=id&limit=1', true)
+        ]);
+        return { 
+            remaining: Number(totalProducts),
+            checked: Number(totalLogs),
+            total: Number(totalProducts) 
+        };
+    } catch (e) {
+        console.error("Stats fetch failed", e);
+        return { remaining: 0, checked: 0, total: 0 };
+    }
 };
 
-// ดึงข้อมูลสินค้าจำกัด 1000 รายการ และใช้ Cache เป็นหลัก
 export const fetchMasterData = async (forceUpdate = false, onProgress?: (current: number, total: number) => void): Promise<ProductMaster[]> => {
-    // 1. ตรวจสอบ Cache ก่อนเสมอ
     const cached = await dbGet(KEYS.CACHE_MASTER);
+    
+    // ถ้ามีข้อมูลในเครื่องแล้ว และไม่ใช่การบังคับอัปเดต ให้คืนค่าทันที
     if (cached && !forceUpdate && cached.length > 0) {
         return cached;
     }
     
     try {
-        // 2. ถ้าไม่มี Cache หรือต้องการ Force Update ให้ดึงจาก Cloud จำกัด 1000 รายการ
         const limit = 1000;
         const data = await callSupabase('products', 'GET', null, `?select=*&order=barcode.asc&limit=${limit}`);
         
         if (Array.isArray(data)) {
             const mapped = data.map(item => ({
-                barcode: String(item.barcode).trim(),
+                barcode: String(item.barcode || '').trim(),
                 productName: item.product_name || 'No Name',
                 costPrice: Number(item.cost_price || 0),
                 unitPrice: Number(item.unit_price || 0),
                 lotNo: item.lot_no || '',
-                // Fix: Corrected property name from product_type to productType to match ProductMaster interface
                 productType: item.product_type || ''
-            }));
-            // บันทึกลง IndexedDB เพื่อให้สลับหน้าไปมาแล้วข้อมูลไม่หาย
+            })).filter(p => p.barcode);
+
             await dbSet(KEYS.CACHE_MASTER, mapped);
             if (onProgress) onProgress(mapped.length, mapped.length);
             return mapped;
         }
     } catch (e) {
-        console.error("FetchMasterData failed:", e);
+        console.error("FetchMasterData Cloud failed:", e);
+        // ถ้าดึงจาก Cloud ไม่ได้ ให้ใช้ Cache เท่าที่มี
+        if (cached) return cached;
     }
     return cached || [];
 };
 
-// Alias สำหรับหน้า QC ที่ต้องการความเร็วสูง
 export const fetchMasterDataBatch = async (forceUpdate = false): Promise<ProductMaster[]> => {
     return fetchMasterData(forceUpdate);
 };
@@ -149,12 +161,17 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         remark: record.remark,
         inspector_id: record.inspectorId,
         image_urls: record.imageUrls || [],
+        lot_no: record.lotNo || '',
+        product_type: record.productType || '',
         timestamp: new Date().toISOString()
     });
-    // ลบออกจากตาราง products เมื่อตรวจเสร็จ
-    await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
     
-    // อัปเดต Cache ทันทีเพื่อให้รายการหายไปจากหน้าจอโดยไม่ต้องดึงใหม่
+    try {
+        await callSupabase('products', 'DELETE', null, `?barcode=eq.${record.barcode}`);
+    } catch (e) {
+        console.error("Delete from products failed but log saved", e);
+    }
+    
     const cached = await dbGet(KEYS.CACHE_MASTER);
     if (Array.isArray(cached)) {
         const filtered = cached.filter((p: any) => p.barcode !== record.barcode);
@@ -177,6 +194,8 @@ export const fetchQCLogs = async (forceUpdate = false): Promise<QCRecord[]> => {
                 status: item.status as QCStatus,
                 reason: item.reason,
                 remark: item.remark,
+                lotNo: item.lot_no || '',
+                productType: item.product_type || '',
                 inspectorId: item.inspector_id,
                 imageUrls: item.image_urls || [],
                 timestamp: item.timestamp
@@ -223,7 +242,7 @@ export const saveProduct = async (p: ProductMaster) => {
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     if (!products.length) return;
-    const CHUNK_SIZE = 100; // ลดขนาด Chunk เพื่อมือถือ
+    const CHUNK_SIZE = 50; // ขนาดเล็กลงสำหรับมือถือ
     for (let i = 0; i < products.length; i += CHUNK_SIZE) {
         const chunk = products.slice(i, i + CHUNK_SIZE);
         const payloads = chunk.map(p => ({
@@ -261,13 +280,13 @@ export const compressImage = (file: File | Blob): Promise<string> => {
             img.src = e.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 800; // ลดขนาดภาพเพื่อมือถือ
+                const MAX_WIDTH = 600; // เล็กลงเพื่อความเร็ว
                 canvas.width = MAX_WIDTH;
                 canvas.height = img.height * (MAX_WIDTH / img.width);
                 const ctx = canvas.getContext('2d');
                 if (ctx) {
                     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    resolve(canvas.toDataURL('image/jpeg', 0.6));
+                    resolve(canvas.toDataURL('image/jpeg', 0.5));
                 }
             }
         }
