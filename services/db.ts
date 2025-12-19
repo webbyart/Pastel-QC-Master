@@ -158,7 +158,6 @@ export const fetchMasterDataBatch = async (forceUpdate = false): Promise<Product
 };
 
 export const submitQCAndRemoveProduct = async (record: any) => {
-    // เตรียม Payload ให้ตรงกับ Database Schema
     const logPayload = {
         barcode: String(record.barcode).trim(),
         product_name: record.productName,
@@ -174,17 +173,14 @@ export const submitQCAndRemoveProduct = async (record: any) => {
         timestamp: new Date().toISOString()
     };
 
-    // 1. บันทึก Log
     await callSupabase('qc_logs', 'POST', logPayload);
     
-    // 2. ลบออกจากคลังสินค้า Cloud
     try {
         await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(record.barcode)}`);
     } catch (e) {
         console.warn("Delete cloud product failed, but log saved.");
     }
     
-    // 3. อัปเดต Cache ในเครื่อง
     const cached = await dbGet(KEYS.CACHE_MASTER);
     if (Array.isArray(cached)) {
         const filtered = cached.filter((p: any) => String(p.barcode).trim() !== String(record.barcode).trim());
@@ -277,11 +273,22 @@ export const deleteProduct = async (barcode: string) => {
     await fetchMasterData(true);
 };
 
-export const clearAllCloudData = async () => {
-    await callSupabase('qc_logs', 'DELETE', null, '?id=neq.-1');
-    await callSupabase('products', 'DELETE', null, '?barcode=neq.CLEAR');
+export const clearProductsCloud = async () => {
+    // ⚠️ PostgREST requires a filter for DELETE to avoid accidental truncates.
+    // 'not.is.null' matches all rows where barcode is present, effectively TRUNCATE.
+    await callSupabase('products', 'DELETE', null, '?barcode=not.is.null');
     await dbDel(KEYS.CACHE_MASTER);
+};
+
+export const clearQCLogsCloud = async () => {
+    // 'not.is.null' matches all rows where ID is present, effectively TRUNCATE.
+    await callSupabase('qc_logs', 'DELETE', null, '?id=not.is.null');
     await dbDel(KEYS.CACHE_LOGS);
+};
+
+export const clearAllCloudData = async () => {
+    await clearQCLogsCloud();
+    await clearProductsCloud();
 };
 
 export const compressImage = (file: File | Blob): Promise<string> => {

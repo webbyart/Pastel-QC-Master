@@ -1,28 +1,37 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useTheme } from '../context/ThemeContext';
 import { 
-  getSupabaseConfig, setSupabaseConfig, testApiConnection
+  getSupabaseConfig, setSupabaseConfig, testApiConnection, 
+  clearProductsCloud, clearQCLogsCloud
 } from '../services/db';
 import { 
   LogOut, Moon, Sun, Check, AlertCircle, 
-  CheckCircle, RefreshCw, Globe, ShieldAlert, Play, Server, 
-  Database, Copy, Info, Terminal, HardDrive,
-  ExternalLink, Lock, Unlock, Database as DbIcon, ShieldCheck,
-  Monitor, Settings as SettingsIcon, AlertOctagon, MousePointer2, ChevronRight, Zap,
-  AlertTriangle, DatabaseZap, Box, Wrench
+  CheckCircle, RefreshCw, Copy, Terminal, 
+  Lock, DatabaseZap, Box, Trash2, ClipboardList, Loader2,
+  ChevronRight, AlertTriangle, ShieldAlert, X, Zap
 } from 'lucide-react';
 
-const REPAIR_SQL = `-- 🛠️ SQL สำหรับซ่อมแซมฐานข้อมูล (Database Repair)
--- รันโค้ดด้านล่างนี้หากพบ Error: Could not find the 'lot_no' column
+const REPAIR_SQL = `-- 🛠️ SQL สำหรับซ่อมแซมและล้างข้อมูลแบบรวดเร็ว (TRUNCATE)
+-- ⚠️ ระวัง: ข้อมูลจะหายถาวร ไม่สามารถย้อนกลับได้
 
+-- 1. ล้างข้อมูลสินค้าทั้งหมด
+TRUNCATE TABLE products;
+
+-- 2. ล้างประวัติการตรวจ QC ทั้งหมด
+TRUNCATE TABLE qc_logs;
+
+-- 3. รีเซ็ต Sequence ของ ID (ถ้าต้องการเริ่มนับ 1 ใหม่)
+-- ALTER SEQUENCE qc_logs_id_seq RESTART WITH 1;
+
+-- 4. ซ่อมแซมคอลัมน์ที่ขาดหาย
 ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS lot_no TEXT;
 ALTER TABLE qc_logs ADD COLUMN IF NOT EXISTS product_type TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS lot_no TEXT;
 ALTER TABLE products ADD COLUMN IF NOT EXISTS product_type TEXT;`;
 
-const SUPABASE_SQL_SCRIPT = `-- 🚀 Supabase Setup Script for QC Master (Full)
+const SUPABASE_SQL_SCRIPT = `-- 🚀 Supabase Setup Script (Full)
 CREATE TABLE IF NOT EXISTS products (
     barcode TEXT PRIMARY KEY,
     product_name TEXT NOT NULL,
@@ -65,8 +74,12 @@ export const Settings: React.FC = () => {
   const [url, setUrl] = useState(initialConfig.url);
   const [key, setKey] = useState(initialConfig.key);
   
-  const [testStatus, setTestStatus] = useState<{status: 'idle' | 'loading' | 'success' | 'error', message: string, code?: string}>({status: 'idle', message: ''});
+  const [testStatus, setTestStatus] = useState<{status: 'idle' | 'loading' | 'success' | 'error', message: string}>({status: 'idle', message: ''});
   const [activeTab, setActiveTab] = useState<'config' | 'sql'>('config');
+  const [isClearing, setIsClearing] = useState(false);
+
+  // Confirmation States
+  const [confirmType, setConfirmType] = useState<'none' | 'products' | 'logs'>('none');
 
   const handleSaveConfig = () => {
     setSupabaseConfig(url, key);
@@ -83,125 +96,206 @@ export const Settings: React.FC = () => {
     }
   };
 
+  const executeClear = async () => {
+    const type = confirmType;
+    setConfirmType('none');
+    setIsClearing(true);
+    try {
+        if (type === 'products') {
+            await clearProductsCloud();
+            alert("✅ ล้างข้อมูลสินค้า (TRUNCATE) เรียบร้อยแล้ว");
+        } else if (type === 'logs') {
+            await clearQCLogsCloud();
+            alert("✅ ล้างประวัติ QC (TRUNCATE) เรียบร้อยแล้ว");
+        }
+    } catch (e: any) {
+        alert("❌ เกิดข้อผิดพลาด: " + e.message);
+    } finally {
+        setIsClearing(false);
+    }
+  };
+
   const copy = (text: string, msg: string) => {
     navigator.clipboard.writeText(text);
     alert(msg);
   };
 
   return (
-    <div className="space-y-6 pb-24 animate-fade-in max-w-5xl mx-auto">
-      <div className="flex justify-between items-center px-2">
-        <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white">ตั้งค่าระบบ</h1>
-        <button onClick={toggleTheme} className="p-3 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700">
-            {isDark ? <Sun className="text-yellow-500" /> : <Moon className="text-gray-400" />}
+    <div className="space-y-6 pb-24 animate-fade-in max-w-4xl mx-auto px-1">
+      
+      {/* Custom Confirmation Modal */}
+      {confirmType !== 'none' && (
+        <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6 bg-black/80 backdrop-blur-md animate-fade-in">
+            <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-10 w-full max-w-md shadow-2xl animate-slide-up border border-gray-100 dark:border-gray-700">
+                <div className="flex flex-col items-center text-center gap-6">
+                    <div className="w-20 h-20 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center text-red-500 animate-bounce-soft">
+                        <AlertTriangle size={48} />
+                    </div>
+                    <div className="space-y-2">
+                        <h2 className="text-2xl font-black text-gray-800 dark:text-white uppercase tracking-tight">ยืนยันการลบข้อมูล?</h2>
+                        <p className="text-gray-500 text-sm leading-relaxed">
+                            ข้อมูลใน <span className="text-red-500 font-bold">{confirmType === 'products' ? 'คลังสินค้า' : 'ประวัติ QC'}</span> ทั้งหมดบน Cloud จะถูกลบถาวร (TRUNCATE) การกระทำนี้ไม่สามารถย้อนกลับได้
+                        </p>
+                    </div>
+                    <div className="flex flex-col w-full gap-3">
+                        <button 
+                            onClick={executeClear}
+                            className="w-full py-5 bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-red-500/30 active:scale-95 transition-all"
+                        >
+                            ยืนยันลบข้อมูลถาวร
+                        </button>
+                        <button 
+                            onClick={() => setConfirmType('none')}
+                            className="w-full py-5 bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-300 rounded-2xl font-black text-xs uppercase tracking-widest active:scale-95 transition-all"
+                        >
+                            ยกเลิก
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      <div className="flex justify-between items-center px-4">
+        <div>
+            <h1 className="text-3xl font-display font-bold text-gray-800 dark:text-white">การตั้งค่า</h1>
+            <p className="text-sm text-gray-400 font-medium">จัดการระบบและฐานข้อมูล Cloud</p>
+        </div>
+        <button onClick={toggleTheme} className="p-4 bg-white dark:bg-gray-800 rounded-2xl shadow-sm border border-gray-100 dark:border-gray-700 transition-all active:scale-90">
+            {isDark ? <Sun className="text-yellow-500" /> : <Moon className="text-pastel-blueDark" />}
         </button>
       </div>
 
-      <div className="flex p-1 bg-gray-100 dark:bg-gray-800 rounded-2xl w-fit mb-4">
-          <button onClick={() => setActiveTab('config')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'config' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>Configuration</button>
-          <button onClick={() => setActiveTab('sql')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all ${activeTab === 'sql' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>SQL Setup</button>
+      <div className="flex p-1.5 bg-gray-100 dark:bg-gray-800 rounded-[1.5rem] w-fit mx-4">
+          <button onClick={() => setActiveTab('config')} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'config' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>Configuration</button>
+          <button onClick={() => setActiveTab('sql')} className={`px-8 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all ${activeTab === 'sql' ? 'bg-white dark:bg-gray-700 shadow-sm text-pastel-blueDark dark:text-white' : 'text-gray-400'}`}>SQL Expert</button>
       </div>
 
       {activeTab === 'config' ? (
-        <div className="space-y-6">
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
-                <div className="flex items-center gap-3 border-b border-gray-50 dark:border-gray-700 pb-4">
-                    <DatabaseZap size={24} className="text-pastel-blueDark" />
-                    <h2 className="text-xl font-bold text-gray-800 dark:text-white">Supabase Cloud Config</h2>
+        <div className="space-y-6 px-4">
+            {/* Supabase Config */}
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
+                <div className="flex items-center gap-4 mb-2">
+                    <div className="p-3 bg-pastel-blue/50 rounded-2xl text-pastel-blueDark"><DatabaseZap size={24} /></div>
+                    <h2 className="text-xl font-bold text-gray-800 dark:text-white">Cloud Connection</h2>
                 </div>
 
                 <div className="space-y-4">
                     <div className="space-y-2">
                         <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Supabase Project URL</label>
-                        <input 
-                            type="text" value={url} onChange={e => setUrl(e.target.value)} 
-                            className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark transition-all" 
-                            placeholder="https://your-project.supabase.co"
-                        />
+                        <input type="text" value={url} onChange={e => setUrl(e.target.value)} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white transition-all" />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Supabase Anon Key</label>
-                        <input 
-                            type="password" value={key} onChange={e => setKey(e.target.value)} 
-                            className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-2 focus:ring-pastel-blueDark transition-all" 
-                            placeholder="your-anon-public-key"
-                        />
+                        <label className="text-[10px] font-black uppercase text-gray-400 ml-2">Anon Public Key</label>
+                        <input type="password" value={key} onChange={e => setKey(e.target.value)} className="w-full p-4 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white transition-all" />
                     </div>
                 </div>
 
                 {testStatus.message && (
-                    <div className={`p-4 rounded-2xl flex items-center gap-3 text-xs font-bold border ${testStatus.status === 'success' ? 'bg-green-50 text-green-600 border-green-100' : testStatus.status === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}>
-                        {testStatus.status === 'loading' ? <RefreshCw className="animate-spin" size={16} /> : testStatus.status === 'success' ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
+                    <div className={`p-4 rounded-2xl flex items-center gap-3 text-xs font-bold border animate-slide-up ${testStatus.status === 'success' ? 'bg-green-50 text-green-600 border-green-100' : testStatus.status === 'error' ? 'bg-red-50 text-red-600 border-red-100' : 'bg-blue-50 text-blue-600 border-blue-100'}`}>
+                        {testStatus.status === 'loading' ? <RefreshCw className="animate-spin" size={16} /> : testStatus.status === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
                         {testStatus.message}
                     </div>
                 )}
 
                 <div className="flex gap-4">
-                    <button onClick={handleTestConnection} className="flex-1 py-4 bg-gray-100 dark:bg-gray-700 rounded-2xl text-sm font-bold active:scale-95 transition-all">ทดสอบการเชื่อมต่อ</button>
-                    <button onClick={handleSaveConfig} className="flex-1 py-4 bg-pastel-blueDark text-white rounded-2xl text-sm font-bold shadow-lg shadow-blue-500/20 active:scale-95 transition-all">บันทึกการตั้งค่า</button>
+                    <button onClick={handleTestConnection} className="flex-1 py-4 bg-gray-50 dark:bg-gray-700 rounded-2xl text-xs font-black uppercase tracking-widest text-gray-500 active:scale-95 transition-all">Test</button>
+                    <button onClick={handleSaveConfig} className="flex-1 py-4 bg-pastel-blueDark text-white rounded-2xl text-xs font-black uppercase tracking-widest shadow-xl shadow-blue-500/20 active:scale-95 transition-all">Save Config</button>
                 </div>
             </div>
 
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700">
-                <div className="flex items-center gap-3 mb-6">
-                    <Lock size={20} className="text-pastel-purpleDark" />
-                    <h2 className="text-xl font-bold text-gray-800 dark:text-white">User Account</h2>
+            {/* Danger Zone / Data Management */}
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
+                <div className="flex items-center gap-4 mb-2">
+                    <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-2xl text-red-500"><ShieldAlert size={24} /></div>
+                    <h2 className="text-xl font-bold text-gray-800 dark:text-white uppercase tracking-tight">การจัดการข้อมูล (Danger Zone)</h2>
                 </div>
-                <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900 rounded-2xl">
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <button 
+                        onClick={() => setConfirmType('products')}
+                        disabled={isClearing}
+                        className="flex flex-col items-center gap-4 p-8 rounded-[2.5rem] bg-red-50/50 dark:bg-red-900/10 border-2 border-dashed border-red-100 dark:border-red-900/30 group active:scale-95 transition-all shadow-sm"
+                    >
+                        <Box size={32} className="text-red-400 group-hover:scale-110 transition-transform" />
+                        <div className="text-center">
+                            <span className="block font-black text-red-600 dark:text-red-400 text-sm uppercase">ล้างข้อมูลสินค้า</span>
+                            <span className="text-[9px] text-red-300 font-bold uppercase tracking-widest">TRUNCATE PRODUCTS</span>
+                        </div>
+                    </button>
+
+                    <button 
+                        onClick={() => setConfirmType('logs')}
+                        disabled={isClearing}
+                        className="flex flex-col items-center gap-4 p-8 rounded-[2.5rem] bg-orange-50/50 dark:bg-orange-900/10 border-2 border-dashed border-orange-100 dark:border-orange-900/30 group active:scale-95 transition-all shadow-sm"
+                    >
+                        <ClipboardList size={32} className="text-orange-400 group-hover:scale-110 transition-transform" />
+                        <div className="text-center">
+                            <span className="block font-black text-orange-600 dark:text-orange-400 text-sm uppercase">ล้างประวัติ QC</span>
+                            <span className="text-[9px] text-orange-300 font-bold uppercase tracking-widest">TRUNCATE HISTORY</span>
+                        </div>
+                    </button>
+                </div>
+
+                {isClearing && (
+                    <div className="flex items-center justify-center gap-3 text-red-500 animate-pulse py-2">
+                        <Loader2 className="animate-spin" size={16} />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Cloud API is performing destruction...</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Account Info */}
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700">
+                <div className="flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-pastel-purple/50 rounded-xl flex items-center justify-center text-pastel-purpleDark font-black">{user?.username.charAt(0).toUpperCase()}</div>
+                        <div className="w-14 h-14 bg-pastel-purple/50 rounded-2xl flex items-center justify-center text-pastel-purpleDark font-black text-xl">{user?.username.charAt(0).toUpperCase()}</div>
                         <div>
-                            <p className="font-bold text-gray-800 dark:text-white">{user?.username}</p>
-                            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{user?.role}</p>
+                            <p className="font-bold text-lg text-gray-800 dark:text-white">{user?.username}</p>
+                            <p className="text-[10px] text-gray-400 font-black uppercase tracking-widest">{user?.role} Account</p>
                         </div>
                     </div>
-                    <button onClick={logout} className="p-3 bg-red-50 text-red-500 rounded-xl active:scale-90 transition-all"><LogOut size={20}/></button>
+                    <button onClick={logout} className="p-4 bg-red-50 text-red-500 rounded-2xl active:scale-90 transition-all"><LogOut size={24}/></button>
                 </div>
             </div>
         </div>
       ) : (
-        <div className="space-y-8">
-            {/* Fix Database Section - High Priority */}
-            <div className="bg-gradient-to-br from-red-500 to-rose-600 p-8 rounded-[2.5rem] shadow-xl text-white space-y-4">
+        <div className="space-y-6 px-4">
+            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-8 rounded-[3rem] shadow-xl text-white space-y-4">
                 <div className="flex justify-between items-start">
                     <div className="flex items-center gap-3">
-                        <Wrench size={32} />
+                        <Terminal size={32} />
                         <div>
-                            <h2 className="text-xl font-bold">แก้ปัญหาบันทึกไม่ได้ (Error 400)</h2>
-                            <p className="text-xs text-red-100">สำหรับผู้ที่พบข้อผิดพลาด "Could not find column lot_no"</p>
+                            <h2 className="text-xl font-bold">SQL Utilities (TRUNCATE)</h2>
+                            <p className="text-xs text-indigo-100">รันคำสั่งเหล่านี้ใน Supabase SQL Editor โดยตรง</p>
                         </div>
                     </div>
-                    <button onClick={() => copy(REPAIR_SQL, 'คัดลอก SQL ซ่อมแซมแล้ว')} className="bg-white/20 hover:bg-white/30 p-4 rounded-2xl transition-all active:scale-90">
+                    <button onClick={() => copy(REPAIR_SQL, 'คัดลอก SQL แล้ว')} className="bg-white/20 hover:bg-white/30 p-4 rounded-2xl active:scale-90 transition-all">
                         <Copy size={20} />
                     </button>
                 </div>
-                <div className="bg-black/20 p-4 rounded-2xl">
-                    <p className="text-[11px] font-mono leading-relaxed opacity-90">
-                        คัดลอก SQL ด้านล่างนี้ไปรันใน Supabase SQL Editor เพื่อซ่อมแซมคอลัมน์ที่ขาดหาย:
+                <div className="bg-black/20 p-5 rounded-[2rem]">
+                    <p className="text-[11px] font-mono leading-relaxed opacity-90 mb-3">
+                        วิธีนี้รวดเร็วและแน่นอนที่สุดสำหรับการล้างฐานข้อมูล:
                     </p>
-                    <pre className="mt-2 text-[10px] font-mono whitespace-pre-wrap bg-black/30 p-3 rounded-xl">
+                    <pre className="text-[10px] font-mono whitespace-pre-wrap bg-black/30 p-4 rounded-xl text-green-300">
                         {REPAIR_SQL}
                     </pre>
                 </div>
             </div>
 
-            {/* Standard SQL Setup */}
-            <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
+            <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
                 <div className="flex justify-between items-center border-b border-gray-50 dark:border-gray-700 pb-4">
                     <div className="flex items-center gap-3">
-                        <Terminal size={24} className="text-pastel-greenDark" />
-                        <h2 className="text-xl font-bold text-gray-800 dark:text-white">Full SQL Setup</h2>
+                        <Check size={24} className="text-green-500" />
+                        <h2 className="text-xl font-bold text-gray-800 dark:text-white">Full Table Schema</h2>
                     </div>
-                    <button onClick={() => copy(SUPABASE_SQL_SCRIPT, 'คัดลอกสคริปต์เต็มแล้ว')} className="flex items-center gap-2 text-[10px] font-black text-pastel-blueDark uppercase tracking-widest bg-pastel-blue/50 px-4 py-2 rounded-xl active:scale-95 transition-all">
-                        <Copy size={14} /> Copy All
-                    </button>
+                    <button onClick={() => copy(SUPABASE_SQL_SCRIPT, 'คัดลอก Schema แล้ว')} className="text-[10px] font-black text-pastel-blueDark uppercase tracking-widest bg-pastel-blue/50 px-5 py-2.5 rounded-xl active:scale-95 transition-all">Copy Schema</button>
                 </div>
                 
-                <div className="relative group">
-                    <pre className="bg-gray-900 text-green-400 p-6 rounded-3xl text-[11px] font-mono overflow-x-auto h-[300px] border-4 border-gray-800 custom-scrollbar">
-                        {SUPABASE_SQL_SCRIPT}
-                    </pre>
-                </div>
+                <pre className="bg-gray-900 text-green-400 p-6 rounded-[2rem] text-[10px] font-mono overflow-x-auto h-[300px] custom-scrollbar border-4 border-gray-800 shadow-inner">
+                    {SUPABASE_SQL_SCRIPT}
+                </pre>
             </div>
         </div>
       )}
