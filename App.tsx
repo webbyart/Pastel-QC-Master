@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -10,11 +11,17 @@ import { QCScreen } from './pages/QCScreen';
 import { Report } from './pages/Report';
 import { Settings } from './pages/Settings';
 
-// Protect Routes
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+// Protected Route with Role Guard
+const ProtectedRoute: React.FC<{ children: React.ReactNode, roles?: string[] }> = ({ children, roles }) => {
   const { user, isLoading } = useAuth();
-  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900 text-pastel-blueDark"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-current"></div></div>;
+  
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900"><div className="w-10 h-10 rounded-full border-4 border-pastel-blueDark border-t-transparent animate-spin"></div></div>;
   if (!user) return <Navigate to="/login" replace />;
+  
+  if (roles && !roles.includes(user.role)) {
+    return <Navigate to="/" replace />;
+  }
+  
   return <>{children}</>;
 };
 
@@ -24,11 +31,12 @@ const AppRoutes = () => {
       <Route path="/login" element={<Login />} />
       <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
         <Route index element={<Dashboard />} />
-        <Route path="products" element={<MasterData />} />
+        <Route path="products" element={<ProtectedRoute roles={['admin']}><MasterData /></ProtectedRoute>} />
         <Route path="qc" element={<QCScreen />} />
         <Route path="report" element={<Report />} />
-        <Route path="settings" element={<Settings />} />
+        <Route path="settings" element={<ProtectedRoute roles={['admin']}><Settings /></ProtectedRoute>} />
       </Route>
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 };

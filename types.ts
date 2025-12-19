@@ -3,13 +3,19 @@ export interface User {
   id: string;
   username: string;
   role: 'admin' | 'user';
+  first_name?: string;
+  last_name?: string;
+  phone?: string;
+  status: 'active' | 'inactive' | 'suspended';
+  is_online: boolean;
+  last_login?: string;
 }
 
 export interface ProductMaster {
-  barcode: string; // Maps to RMS Return Item ID
+  barcode: string; 
   productName: string;
-  costPrice: number; // Maps to ต้นทุน
-  unitPrice?: number; // Maps to Product unit price
+  costPrice: number; 
+  unitPrice?: number; 
   image?: string; 
   stock?: number;
   lotNo?: string; 
@@ -19,12 +25,6 @@ export interface ProductMaster {
 export enum QCStatus {
   PASS = 'Pass',
   DAMAGE = 'Damage',
-}
-
-export enum DataSourceType {
-  GOOGLE_SHEETS = 'google_sheets',
-  MYSQL_BRIDGE = 'mysql_bridge',
-  SUPABASE = 'supabase'
 }
 
 export interface QCRecord {
