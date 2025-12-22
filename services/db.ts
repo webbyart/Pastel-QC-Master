@@ -72,8 +72,12 @@ export const deleteUserData = async (id: string) => {
     return await callSupabase('users', 'DELETE', null, `?id=eq.${id}`);
 };
 
+/**
+ * ดึงข้อมูลคลังสินค้าทั้งหมด (รองรับจำนวนมาก)
+ */
 export const fetchMasterData = async (force = false): Promise<ProductMaster[]> => {
-    const data = await callSupabase('products', 'GET', null, '?order=barcode.asc');
+    // เพิ่ม limit ให้สูงขึ้นเพื่อดึงข้อมูลทั้งหมดตามคำขอ
+    const data = await callSupabase('products', 'GET', null, '?order=barcode.asc&limit=100000');
     const mapped = data.map((item: any) => ({
         barcode: item.barcode,
         productName: item.product_name,
@@ -171,24 +175,45 @@ export const dbGet = async (key: string) => {
     return data ? JSON.parse(data) : null;
 };
 
+/**
+ * ดึงสถิติรวมของระบบ Cloud
+ */
 export const fetchCloudStats = async () => {
+    const { url, key } = getSupabaseConfig();
     try {
-        const productsRes = await callSupabase('products', 'GET', null, '?select=barcode');
-        const logsRes = await callSupabase('qc_logs', 'GET', null, '?select=id');
+        // ใช้ head=true และ count=exact เพื่อประหยัด Bandwidth ในการนับจำนวน
+        const getCount = async (table: string) => {
+            const res = await fetch(`${url}/rest/v1/${table}?select=id`, {
+                method: 'GET',
+                headers: {
+                    'apikey': key,
+                    'Authorization': `Bearer ${key}`,
+                    'Prefer': 'count=exact'
+                }
+            });
+            const range = res.headers.get('content-range');
+            if (range) {
+                return parseInt(range.split('/')[1]);
+            }
+            // Fallback กรณี headers ไม่ส่งกลับมา
+            const data = await res.json();
+            return Array.isArray(data) ? data.length : 0;
+        };
+
+        const totalCount = await getCount('products');
+        const logsCount = await getCount('qc_logs');
+
         return {
-            total: Array.isArray(productsRes) ? productsRes.length : 0,
-            checked: Array.isArray(logsRes) ? logsRes.length : 0,
-            remaining: Array.isArray(productsRes) ? productsRes.length : 0
+            total: totalCount,
+            checked: logsCount,
+            remaining: totalCount
         };
     } catch (e) {
+        console.error("Fetch stats error:", e);
         return { total: 0, checked: 0, remaining: 0 };
     }
 };
 
-/**
- * Robust Excel Import Logic
- * Maps messy Excel headers to required ProductMaster fields.
- */
 export const importMasterData = async (file: File): Promise<ProductMaster[]> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -201,12 +226,10 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
                 const json: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
                 
                 if (json.length === 0) {
-                    console.warn("Excel file is empty or could not be parsed.");
                     resolve([]);
                     return;
                 }
 
-                // Header synonyms mapping for high-accuracy detection
                 const SYNONYMS = {
                     barcode: ['barcode', 'บาร์โค้ด', 'รหัสสินค้า', 'รหัสบาร์โค้ด', 'barcode_id', 'code', 'id', 'sku', 'รหัส', 'bar code', 'item code'],
                     productName: ['productName', 'product_name', 'ชื่อสินค้า', 'รายการสินค้า', 'ชื่อ', 'name', 'item', 'product', 'รายการ', 'ชื่อรายการ', 'item name', 'description'],
@@ -218,47 +241,30 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
 
                 const getValue = (obj: any, keys: string[]) => {
                     const objKeys = Object.keys(obj);
-                    // Try exact matches first (normalized)
                     const foundKey = objKeys.find(k => {
                         const nk = k.toString().toLowerCase().trim().replace(/[\s_\-]/g, '');
                         return keys.some(pk => nk === pk.toLowerCase().replace(/[\s_\-]/g, ''));
                     });
-
-                    // Fallback to partial matches if exact fails
                     const finalKey = foundKey || objKeys.find(k => {
                         const nk = k.toString().toLowerCase().trim();
                         return keys.some(pk => nk.includes(pk.toLowerCase()) || pk.toLowerCase().includes(nk));
                     });
-
                     return finalKey !== undefined ? obj[finalKey] : undefined;
                 };
 
-                const products: ProductMaster[] = json.map((item: any, index: number) => {
+                const products: ProductMaster[] = json.map((item: any) => {
                     const barcodeRaw = getValue(item, SYNONYMS.barcode);
                     const nameRaw = getValue(item, SYNONYMS.productName);
-                    
-                    // Handle Excel reading numeric barcodes as numbers or scientific notation
                     const barcode = (barcodeRaw !== undefined && barcodeRaw !== null) ? String(barcodeRaw).trim() : "";
                     const productName = (nameRaw !== undefined && nameRaw !== null) ? String(nameRaw).trim() : "";
-                    
                     const costPriceRaw = getValue(item, SYNONYMS.costPrice);
                     const unitPriceRaw = getValue(item, SYNONYMS.unitPrice);
-                    
                     const costPrice = isNaN(parseFloat(String(costPriceRaw))) ? 0 : parseFloat(String(costPriceRaw));
                     const unitPrice = isNaN(parseFloat(String(unitPriceRaw))) ? 0 : parseFloat(String(unitPriceRaw));
-                    
                     const lotNo = String(getValue(item, SYNONYMS.lotNo) || '').trim();
                     const productType = String(getValue(item, SYNONYMS.productType) || '').trim();
-
                     return { barcode, productName, costPrice, unitPrice, lotNo, productType };
-                }).filter(p => {
-                    const isValid = p.barcode !== "" && p.productName !== "";
-                    return isValid;
-                });
-                
-                if (products.length === 0 && json.length > 0) {
-                    console.warn("Headers detected in Excel:", Object.keys(json[0]));
-                }
+                }).filter(p => p.barcode !== "" && p.productName !== "");
                 
                 resolve(products);
             } catch (err) {
@@ -274,7 +280,7 @@ export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (
     const total = products.length;
     if (total === 0) return;
     
-    const batchSize = 50;
+    const batchSize = 100; // เพิ่ม batch size ให้เร็วขึ้น
     for (let i = 0; i < total; i += batchSize) {
         const batch = products.slice(i, i + batchSize).map(p => ({
             barcode: String(p.barcode).trim(),
@@ -303,7 +309,6 @@ export const compressImage = async (file: File | Blob): Promise<string> => {
                 const MAX_HEIGHT = 1200;
                 let width = img.width;
                 let height = img.height;
-
                 if (width > height) {
                     if (width > MAX_WIDTH) {
                         height *= MAX_WIDTH / width;

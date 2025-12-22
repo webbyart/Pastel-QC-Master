@@ -146,7 +146,7 @@ export const MasterData: React.FC = () => {
           </div>
       )}
 
-      {/* Stats Section with 3 Cards */}
+      {/* Stats Section with Updated Labels and Large Counts */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
             <div className="p-4 bg-pastel-blue/50 rounded-2xl text-pastel-blueDark">
