@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats, dbGet } from '../services/db';
 import { ProductMaster } from '../types';
-import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, AlertCircle, X } from 'lucide-react';
+import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, AlertCircle, X, ClipboardCheck, LayoutGrid } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
@@ -71,8 +71,7 @@ export const MasterData: React.FC = () => {
         const newProducts = await importMasterData(file);
         
         if (newProducts.length === 0) {
-            console.error("Import Debug: No valid products found after mapping headers.");
-            alert('❌ ไม่พบข้อมูลที่ถูกต้องในไฟล์!\n\nกรุณาตรวจสอบว่าหัวตารางมีช่องชื่อ:\n- บาร์โค้ด (หรือ barcode)\n- ชื่อสินค้า (หรือ productName)\n\nและต้องมีข้อมูลในแถวนั้นๆ ด้วย');
+            alert('❌ ไม่พบข้อมูลที่ถูกต้องในไฟล์!\n\nกรุณาตรวจสอบว่าหัวตารางมีช่องชื่อ:\n- บาร์โค้ด (หรือ barcode)\n- ชื่อสินค้า (หรือ productName)');
             setIsProcessing(false);
             return;
         }
@@ -88,7 +87,6 @@ export const MasterData: React.FC = () => {
         setIsProcessing(false);
         alert(`✅ นำเข้าสำเร็จ ${newProducts.length} รายการ เรียบร้อยแล้ว!`);
       } catch (err: any) { 
-        console.error("Import Error Detail:", err);
         alert('เกิดข้อผิดพลาดในการนำเข้า: ' + (err.message || 'รูปแบบไฟล์ไม่ถูกต้อง')); 
         setIsProcessing(false);
       } finally { 
@@ -127,23 +125,6 @@ export const MasterData: React.FC = () => {
     }
   };
 
-  const handleClearData = async () => {
-    if (confirm("⚠️ ต้องการล้างข้อมูลคลังสินค้าและประวัติทั้งหมดบน Cloud?")) {
-        setIsProcessing(true);
-        setProcessLabel('กำลังล้างข้อมูล...');
-        try {
-            await clearAllCloudData();
-            setProducts([]);
-            setCloudStats({ remaining: 0, checked: 0, total: 0 });
-            setIsProcessing(false);
-            alert("ล้างข้อมูลเรียบร้อย");
-        } catch (e: any) {
-            alert("ล้มเหลว: " + e.message);
-            setIsProcessing(false);
-        }
-    }
-  };
-
   const filtered = products.filter(p => 
     (p.productName || "").toLowerCase().includes(searchTerm.toLowerCase()) || 
     (p.barcode || "").toLowerCase().includes(searchTerm.toLowerCase())
@@ -165,35 +146,45 @@ export const MasterData: React.FC = () => {
           </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="bg-white dark:bg-gray-800 p-5 rounded-[2rem] shadow-sm border border-gray-100 flex items-center gap-4">
-            <div className="p-3 bg-pastel-blue/50 rounded-xl text-pastel-blueDark">
-                <Database size={20} />
+      {/* Stats Section with 3 Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
+            <div className="p-4 bg-pastel-blue/50 rounded-2xl text-pastel-blueDark">
+                <Database size={24} />
             </div>
             <div>
-                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Inventory</p>
-                <p className="text-xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()}</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Total Inventory</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()}</p>
             </div>
         </div>
-        <div className="bg-white dark:bg-gray-800 p-5 rounded-[2rem] shadow-sm border border-gray-100 flex items-center gap-4">
-            <div className="p-3 bg-pastel-purple/50 rounded-xl text-pastel-purpleDark">
-                <Server size={20} />
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
+            <div className="p-4 bg-pastel-green/50 rounded-2xl text-pastel-greenDark">
+                <LayoutGrid size={24} />
             </div>
             <div>
-                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Checked</p>
-                <p className="text-xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()}</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">System Inventory</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{products.length.toLocaleString()}</p>
+            </div>
+        </div>
+        <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
+            <div className="p-4 bg-pastel-purple/50 rounded-2xl text-pastel-purpleDark">
+                <ClipboardCheck size={24} />
+            </div>
+            <div>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Checked</p>
+                <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()}</p>
             </div>
         </div>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 p-8 rounded-[2.5rem] shadow-sm border border-gray-100 space-y-6">
+      <div className="bg-white dark:bg-gray-800 p-8 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 space-y-6">
         <div className="flex justify-between items-center">
             <h1 className="text-2xl font-display font-bold text-gray-800 dark:text-white flex items-center gap-3">
                 <Box className="text-pastel-blueDark" size={28} />
                 คลังสินค้า
             </h1>
             <div className="flex gap-2">
-              <button onClick={() => loadSessionData(true)} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-xl text-gray-400 hover:text-pastel-blueDark transition-all">
+              <button onClick={() => loadSessionData(true)} className="p-3 bg-gray-50 dark:bg-gray-900 rounded-xl text-gray-400 hover:text-pastel-blueDark transition-all active:scale-90">
                 <RefreshCw size={20} className={isLoading ? 'animate-spin' : ''} />
               </button>
               <button onClick={() => { setIsEditMode(false); setEditingProduct({}); setShowModal(true); }} className="bg-pastel-blueDark text-white p-3 rounded-xl shadow-lg active:scale-90 transition-transform">
@@ -203,11 +194,11 @@ export const MasterData: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap gap-3">
-            <label className="flex-1 bg-white border border-gray-100 dark:bg-gray-800 p-4 rounded-2xl flex items-center justify-center gap-3 text-[10px] font-black uppercase tracking-widest text-green-600 cursor-pointer active:scale-95 transition-all shadow-sm">
+            <label className="flex-1 min-w-[140px] bg-white border border-gray-100 dark:bg-gray-900 dark:border-gray-700 p-4 rounded-2xl flex items-center justify-center gap-3 text-[10px] font-black uppercase tracking-widest text-green-600 cursor-pointer active:scale-95 transition-all shadow-sm">
                 <FileSpreadsheet size={18} /> นำเข้า Excel
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
             </label>
-            <button onClick={handleSyncToCloud} className="flex-1 bg-pastel-blueDark text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all">
+            <button onClick={handleSyncToCloud} className="flex-1 min-w-[140px] bg-pastel-blueDark text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all">
                 <CloudUpload size={18} /> ซิงค์คลาวด์
             </button>
         </div>
@@ -216,7 +207,7 @@ export const MasterData: React.FC = () => {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={20} />
             <input 
               type="text" placeholder="ค้นหาชื่อ หรือ บาร์โค้ด..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
-              className="w-full pl-12 pr-4 py-5 bg-gray-50 dark:bg-gray-900 border-none rounded-2xl text-sm font-medium shadow-inner" 
+              className="w-full pl-12 pr-4 py-5 bg-gray-50 dark:bg-gray-900 border-none rounded-2xl text-sm font-medium shadow-inner dark:text-white focus:ring-4 focus:ring-pastel-blueDark/10 transition-all" 
             />
         </div>
       </div>
@@ -227,7 +218,7 @@ export const MasterData: React.FC = () => {
               <p className="text-[10px] font-black uppercase tracking-[0.3em]">กำลังดึงข้อมูล...</p>
           </div>
       ) : products.length === 0 ? (
-        <div className="p-24 text-center flex flex-col items-center gap-6 text-gray-300 bg-white dark:bg-gray-800 rounded-[2.5rem] border border-gray-100">
+        <div className="p-24 text-center flex flex-col items-center gap-6 text-gray-300 bg-white dark:bg-gray-800 rounded-[3rem] border border-gray-100 dark:border-gray-700 shadow-sm animate-fade-in">
             <AlertCircle size={64} className="opacity-10" />
             <div className="space-y-1">
                 <p className="text-xs font-black uppercase tracking-widest">ยังไม่มีข้อมูลในคลังสินค้า</p>
@@ -235,19 +226,19 @@ export const MasterData: React.FC = () => {
             </div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-gray-800 rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden">
+        <div className="bg-white dark:bg-gray-800 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
             <div className="overflow-x-auto no-scrollbar">
                 <table className="w-full text-left table-fixed">
                     <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[9px] uppercase font-black tracking-widest border-b border-gray-100 dark:border-gray-700">
                         <tr>
-                            <th className="p-5 pl-8 w-32">บาร์โค้ด</th>
+                            <th className="p-5 pl-8 w-40">บาร์โค้ด</th>
                             <th className="p-5">ชื่อสินค้า</th>
-                            <th className="p-5 w-24 text-center">ราคา</th>
+                            <th className="p-5 w-24 text-center">ราคาขาย</th>
                             <th className="p-5 pr-8 w-16 text-right">จัดการ</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
-                        {filtered.slice(0, 100).map(product => ( 
+                        {filtered.map(product => ( 
                             <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 active:bg-gray-100 transition-colors">
                                 <td className="p-5 pl-8">
                                     <span className="font-mono text-[10px] text-gray-400 bg-gray-50 dark:bg-gray-900 px-2 py-1 rounded">
@@ -255,10 +246,10 @@ export const MasterData: React.FC = () => {
                                     </span>
                                 </td>
                                 <td className="p-5">
-                                    <p className="text-[12px] font-bold text-gray-800 dark:text-white truncate">{product.productName}</p>
+                                    <p className="text-[12px] font-bold text-gray-800 dark:text-white truncate" title={product.productName}>{product.productName}</p>
                                 </td>
                                 <td className="p-5 text-center">
-                                    <span className="text-[12px] text-pastel-blueDark font-black">฿{product.unitPrice?.toLocaleString()}</span>
+                                    <span className="text-[12px] text-pastel-blueDark dark:text-blue-400 font-black">฿{product.unitPrice?.toLocaleString()}</span>
                                 </td>
                                 <td className="p-5 pr-8 text-right">
                                     <button onClick={() => { setIsEditMode(true); setEditingProduct(product); setShowModal(true); }} className="text-gray-300 hover:text-pastel-blueDark transition-colors p-2"><Edit2 size={16}/></button>
@@ -267,16 +258,16 @@ export const MasterData: React.FC = () => {
                         ))}
                     </tbody>
                 </table>
-                {filtered.length > 100 && (
-                    <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700">
-                        แสดงข้อมูล 100 รายการแรกจากทั้งหมด {filtered.length}
-                    </div>
-                )}
             </div>
+            {filtered.length > 0 && (
+                <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700">
+                    แสดงข้อมูล {filtered.length.toLocaleString()} รายการ
+                </div>
+            )}
         </div>
       )}
 
-      {/* Modal remains the same */}
+      {/* Modal Edit/Add */}
       {showModal && (
         <div className="fixed inset-0 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
             <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={() => setShowModal(false)} />
@@ -287,7 +278,7 @@ export const MasterData: React.FC = () => {
                             {isEditMode ? <Edit2 size={24} className="text-pastel-blueDark" /> : <Plus size={24} className="text-pastel-blueDark" />}
                             {isEditMode ? 'แก้ไขสินค้า' : 'เพิ่มสินค้าใหม่'}
                         </h2>
-                        <button onClick={() => setShowModal(false)} className="p-2 bg-gray-100 dark:bg-gray-900 rounded-full"><X size={20}/></button>
+                        <button onClick={() => setShowModal(false)} className="p-2 bg-gray-100 dark:bg-gray-900 rounded-full dark:text-white"><X size={20}/></button>
                     </div>
 
                     <form onSubmit={handleSaveProduct} className="space-y-6">
