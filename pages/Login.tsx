@@ -117,7 +117,7 @@ export const Login: React.FC = () => {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               className="w-full px-6 py-5 rounded-[2rem] bg-gray-50 dark:bg-gray-900 border-none focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white font-bold transition-all"
-              placeholder="artkitthana12@gmail.com"
+              placeholder="กรอกอีเมลเข้าใช้งาน"
               disabled={isLoading}
             />
           </div>
@@ -150,7 +150,7 @@ export const Login: React.FC = () => {
         </form>
         
         <div className="mt-10 pt-8 border-t border-gray-50 dark:border-gray-700/50 text-center">
-            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Master Admin: artkitthana12@gmail.com</p>
+            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">หากเจอปัญหาการเข้าใช้งานติดต่อ ADMIN</p>
         </div>
       </div>
 
