@@ -2,7 +2,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats, dbGet } from '../services/db';
 import { ProductMaster } from '../types';
-// Fixed: Added 'X' to lucide-react imports
 import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, AlertCircle, X } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
@@ -64,13 +63,22 @@ export const MasterData: React.FC = () => {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
+      const file = e.target.files[0];
       setIsProcessing(true);
       setProcessLabel('กำลังอ่านข้อมูล Excel...');
       setProgressPct(10);
       try {
-        const newProducts = await importMasterData(e.target.files[0]);
+        const newProducts = await importMasterData(file);
+        
+        if (newProducts.length === 0) {
+            console.error("Import Debug: No valid products found after mapping headers.");
+            alert('❌ ไม่พบข้อมูลที่ถูกต้องในไฟล์!\n\nกรุณาตรวจสอบว่าหัวตารางมีช่องชื่อ:\n- บาร์โค้ด (หรือ barcode)\n- ชื่อสินค้า (หรือ productName)\n\nและต้องมีข้อมูลในแถวนั้นๆ ด้วย');
+            setIsProcessing(false);
+            return;
+        }
+
         setProgressPct(30);
-        setProcessLabel(`กำลังอัปโหลด ${newProducts.length.toLocaleString()} รายการ...`);
+        setProcessLabel(`พบ ${newProducts.length.toLocaleString()} รายการ กำลังอัปโหลด...`);
         
         await bulkSaveProducts(newProducts, (pct) => {
             setProgressPct(30 + Math.floor(pct * 0.7));
@@ -78,9 +86,10 @@ export const MasterData: React.FC = () => {
 
         await loadSessionData(true);
         setIsProcessing(false);
-        alert(`✅ นำเข้าสำเร็จ!`);
+        alert(`✅ นำเข้าสำเร็จ ${newProducts.length} รายการ เรียบร้อยแล้ว!`);
       } catch (err: any) { 
-        alert('เกิดข้อผิดพลาด: ' + err.message); 
+        console.error("Import Error Detail:", err);
+        alert('เกิดข้อผิดพลาดในการนำเข้า: ' + (err.message || 'รูปแบบไฟล์ไม่ถูกต้อง')); 
         setIsProcessing(false);
       } finally { 
         e.target.value = ''; 
@@ -136,8 +145,8 @@ export const MasterData: React.FC = () => {
   };
 
   const filtered = products.filter(p => 
-    p.productName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    p.barcode.toLowerCase().includes(searchTerm.toLowerCase())
+    (p.productName || "").toLowerCase().includes(searchTerm.toLowerCase()) || 
+    (p.barcode || "").toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
@@ -267,7 +276,7 @@ export const MasterData: React.FC = () => {
         </div>
       )}
 
-      {/* Modal - Optimized for mobile */}
+      {/* Modal remains the same */}
       {showModal && (
         <div className="fixed inset-0 z-[200] flex items-end md:items-center justify-center p-0 md:p-6 animate-fade-in">
             <div className="absolute inset-0 bg-black/60 backdrop-blur-md" onClick={() => setShowModal(false)} />

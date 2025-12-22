@@ -35,15 +35,12 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
     return await res.json();
 };
 
-// Auth & User Management
 export const loginUser = async (username: string): Promise<User | null> => {
     try {
         const users = await callSupabase('users', 'GET', null, `?username=eq.${username.toLowerCase()}&limit=1`);
         if (users && users.length > 0) {
             const user = users[0];
             if (user.status !== 'active') throw new Error('บัญชีนี้ถูกระงับการใช้งาน');
-            
-            // Update Online Status & Last Login
             await callSupabase('users', 'PATCH', { is_online: true, last_login: new Date().toISOString() }, `?id=eq.${user.id}`);
             return user;
         }
@@ -75,28 +72,22 @@ export const deleteUserData = async (id: string) => {
     return await callSupabase('users', 'DELETE', null, `?id=eq.${id}`);
 };
 
-// QC & Product Data
-
-// Added caching logic to fetchMasterData
 export const fetchMasterData = async (force = false): Promise<ProductMaster[]> => {
     const data = await callSupabase('products', 'GET', null, '?order=barcode.asc');
     const mapped = data.map((item: any) => ({
         barcode: item.barcode,
         productName: item.product_name,
-        costPrice: Number(item.cost_price),
-        unitPrice: Number(item.unit_price),
+        costPrice: Number(item.cost_price || 0),
+        unitPrice: Number(item.unit_price || 0),
         lotNo: item.lot_no,
-        productType: item.product_type
+        product_type: item.product_type
     }));
-    // Cache mapped data to localStorage
     localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(mapped));
     return mapped;
 };
 
-// Added fetchMasterDataBatch as an alias to satisfy QCScreen.tsx
 export const fetchMasterDataBatch = async (force = false) => fetchMasterData(force);
 
-// Added caching logic to fetchQCLogs
 export const fetchQCLogs = async (force = false, filterByInspector?: string): Promise<QCRecord[]> => {
     let query = '?order=timestamp.desc';
     if (filterByInspector) query += `&inspector_id=eq.${filterByInspector}`;
@@ -106,8 +97,8 @@ export const fetchQCLogs = async (force = false, filterByInspector?: string): Pr
         id: String(item.id),
         barcode: item.barcode,
         productName: item.product_name,
-        costPrice: Number(item.cost_price),
-        sellingPrice: Number(item.selling_price),
+        costPrice: Number(item.cost_price || 0),
+        sellingPrice: Number(item.selling_price || 0),
         status: item.status as QCStatus,
         reason: item.reason,
         remark: item.remark,
@@ -115,9 +106,8 @@ export const fetchQCLogs = async (force = false, filterByInspector?: string): Pr
         imageUrls: item.image_urls || [],
         timestamp: item.timestamp,
         lotNo: item.lot_no,
-        productType: item.product_type
+        product_type: item.product_type
     }));
-    // Cache logs to localStorage
     localStorage.setItem(KEYS.CACHE_LOGS, JSON.stringify(mapped));
     return mapped;
 };
@@ -129,10 +119,10 @@ export const submitQCAndRemoveProduct = async (record: any) => {
 
 export const saveProduct = async (p: ProductMaster) => {
     await callSupabase('products', 'POST', {
-        barcode: p.barcode,
-        product_name: p.productName,
-        cost_price: p.costPrice,
-        unit_price: p.unitPrice,
+        barcode: String(p.barcode).trim(),
+        product_name: String(p.productName).trim(),
+        cost_price: isNaN(Number(p.costPrice)) ? 0 : Number(p.costPrice),
+        unit_price: isNaN(Number(p.unitPrice)) ? 0 : Number(p.unitPrice),
         lot_no: p.lotNo,
         product_type: p.productType
     });
@@ -145,7 +135,6 @@ export const deleteProduct = async (barcode: string) => {
 export const clearProductsCloud = async () => callSupabase('products', 'DELETE', null, '?barcode=not.is.null');
 export const clearQCLogsCloud = async () => callSupabase('qc_logs', 'DELETE', null, '?id=not.is.null');
 
-// Added clearAllCloudData to satisfy MasterData.tsx
 export const clearAllCloudData = async () => {
     await clearProductsCloud();
     await clearQCLogsCloud();
@@ -165,7 +154,6 @@ export const exportQCLogs = async (logs: QCRecord[]) => {
     XLSX.writeFile(workbook, `QC_Report_${new Date().getTime()}.xlsx`);
 };
 
-// Added exportMasterData to satisfy MasterData.tsx import
 export const exportMasterData = async (products: ProductMaster[]) => {
     const worksheet = XLSX.utils.json_to_sheet(products);
     const workbook = XLSX.utils.book_new();
@@ -178,13 +166,11 @@ export const setSupabaseConfig = (url: string, key: string) => {
     localStorage.setItem(KEYS.SUPABASE_KEY, key);
 };
 
-// Added dbGet to satisfy MasterData.tsx
 export const dbGet = async (key: string) => {
     const data = localStorage.getItem(key);
     return data ? JSON.parse(data) : null;
 };
 
-// Added fetchCloudStats to satisfy MasterData.tsx and QCScreen.tsx
 export const fetchCloudStats = async () => {
     try {
         const productsRes = await callSupabase('products', 'GET', null, '?select=barcode');
@@ -199,26 +185,80 @@ export const fetchCloudStats = async () => {
     }
 };
 
-// Added importMasterData to satisfy MasterData.tsx
+/**
+ * Robust Excel Import Logic
+ * Maps messy Excel headers to required ProductMaster fields.
+ */
 export const importMasterData = async (file: File): Promise<ProductMaster[]> => {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = (e) => {
             try {
                 const data = e.target?.result;
-                const workbook = XLSX.read(data, { type: 'binary' });
+                const workbook = XLSX.read(data, { type: 'array' });
                 const sheetName = workbook.SheetNames[0];
                 const worksheet = workbook.Sheets[sheetName];
-                const json = XLSX.utils.sheet_to_json(worksheet);
+                const json: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
                 
-                const products: ProductMaster[] = json.map((item: any) => ({
-                    barcode: String(item.barcode || item.Barcode || ''),
-                    productName: String(item.productName || item.ProductName || item.name || ''),
-                    costPrice: Number(item.costPrice || item.CostPrice || 0),
-                    unitPrice: Number(item.unitPrice || item.UnitPrice || 0),
-                    lotNo: String(item.lotNo || item.LotNo || ''),
-                    productType: String(item.productType || item.ProductType || '')
-                })).filter(p => p.barcode && p.productName);
+                if (json.length === 0) {
+                    console.warn("Excel file is empty or could not be parsed.");
+                    resolve([]);
+                    return;
+                }
+
+                // Header synonyms mapping for high-accuracy detection
+                const SYNONYMS = {
+                    barcode: ['barcode', 'บาร์โค้ด', 'รหัสสินค้า', 'รหัสบาร์โค้ด', 'barcode_id', 'code', 'id', 'sku', 'รหัส', 'bar code', 'item code'],
+                    productName: ['productName', 'product_name', 'ชื่อสินค้า', 'รายการสินค้า', 'ชื่อ', 'name', 'item', 'product', 'รายการ', 'ชื่อรายการ', 'item name', 'description'],
+                    costPrice: ['costPrice', 'cost_price', 'ต้นทุน', 'ราคาทุน', 'ราคาซื้อ', 'ทุน', 'cost', 'unit cost', 'purchase price'],
+                    unitPrice: ['unitPrice', 'unit_price', 'ราคาขาย', 'ราคา', 'price', 'ขาย', 'หน่วยละ', 'ราคาขายปลีก', 'selling price', 'retail price'],
+                    lotNo: ['lotNo', 'lot_no', 'ล๊อต', 'ล็อต', 'lot', 'batch'],
+                    productType: ['productType', 'product_type', 'ประเภท', 'หมวดหมู่', 'category', 'group', 'type']
+                };
+
+                const getValue = (obj: any, keys: string[]) => {
+                    const objKeys = Object.keys(obj);
+                    // Try exact matches first (normalized)
+                    const foundKey = objKeys.find(k => {
+                        const nk = k.toString().toLowerCase().trim().replace(/[\s_\-]/g, '');
+                        return keys.some(pk => nk === pk.toLowerCase().replace(/[\s_\-]/g, ''));
+                    });
+
+                    // Fallback to partial matches if exact fails
+                    const finalKey = foundKey || objKeys.find(k => {
+                        const nk = k.toString().toLowerCase().trim();
+                        return keys.some(pk => nk.includes(pk.toLowerCase()) || pk.toLowerCase().includes(nk));
+                    });
+
+                    return finalKey !== undefined ? obj[finalKey] : undefined;
+                };
+
+                const products: ProductMaster[] = json.map((item: any, index: number) => {
+                    const barcodeRaw = getValue(item, SYNONYMS.barcode);
+                    const nameRaw = getValue(item, SYNONYMS.productName);
+                    
+                    // Handle Excel reading numeric barcodes as numbers or scientific notation
+                    const barcode = (barcodeRaw !== undefined && barcodeRaw !== null) ? String(barcodeRaw).trim() : "";
+                    const productName = (nameRaw !== undefined && nameRaw !== null) ? String(nameRaw).trim() : "";
+                    
+                    const costPriceRaw = getValue(item, SYNONYMS.costPrice);
+                    const unitPriceRaw = getValue(item, SYNONYMS.unitPrice);
+                    
+                    const costPrice = isNaN(parseFloat(String(costPriceRaw))) ? 0 : parseFloat(String(costPriceRaw));
+                    const unitPrice = isNaN(parseFloat(String(unitPriceRaw))) ? 0 : parseFloat(String(unitPriceRaw));
+                    
+                    const lotNo = String(getValue(item, SYNONYMS.lotNo) || '').trim();
+                    const productType = String(getValue(item, SYNONYMS.productType) || '').trim();
+
+                    return { barcode, productName, costPrice, unitPrice, lotNo, productType };
+                }).filter(p => {
+                    const isValid = p.barcode !== "" && p.productName !== "";
+                    return isValid;
+                });
+                
+                if (products.length === 0 && json.length > 0) {
+                    console.warn("Headers detected in Excel:", Object.keys(json[0]));
+                }
                 
                 resolve(products);
             } catch (err) {
@@ -226,29 +266,30 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
             }
         };
         reader.onerror = (err) => reject(err);
-        reader.readAsBinaryString(file);
+        reader.readAsArrayBuffer(file);
     });
 };
 
-// Added bulkSaveProducts to satisfy MasterData.tsx
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
     const total = products.length;
-    const batchSize = 25;
+    if (total === 0) return;
+    
+    const batchSize = 50;
     for (let i = 0; i < total; i += batchSize) {
         const batch = products.slice(i, i + batchSize).map(p => ({
-            barcode: p.barcode,
-            product_name: p.productName,
-            cost_price: p.costPrice,
-            unit_price: p.unitPrice,
-            lot_no: p.lotNo,
-            product_type: p.productType
+            barcode: String(p.barcode).trim(),
+            product_name: String(p.productName).trim(),
+            cost_price: isNaN(Number(p.costPrice)) ? 0 : Number(p.costPrice),
+            unit_price: isNaN(Number(p.unitPrice)) ? 0 : Number(p.unitPrice),
+            lot_no: String(p.lotNo || '').trim(),
+            product_type: String(p.productType || '').trim()
         }));
+        
         await callSupabase('products', 'POST', batch);
         if (onProgress) onProgress(Math.min(100, Math.round(((i + batchSize) / total) * 100)));
     }
 };
 
-// Added compressImage to satisfy QCScreen.tsx
 export const compressImage = async (file: File | Blob): Promise<string> => {
     return new Promise((resolve) => {
         const reader = new FileReader();
