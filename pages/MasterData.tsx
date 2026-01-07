@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { fetchMasterData, importMasterData, saveProduct, bulkSaveProducts, fetchCloudStats, dbGet } from '../services/db';
 import { ProductMaster } from '../types';
-import { Search, Plus, Edit2, Loader2, Box, CloudUpload, FileSpreadsheet, RefreshCw, Database, LayoutGrid, ClipboardCheck, X, AlertCircle } from 'lucide-react';
+import { Search, Plus, Edit2, Loader2, Box, CloudUpload, FileSpreadsheet, RefreshCw, Database, LayoutGrid, ClipboardCheck, X, AlertCircle, ChevronDown } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
@@ -10,6 +10,7 @@ export const MasterData: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
   const [cloudStats, setCloudStats] = useState({ remaining: 0, checked: 0, total: 0 });
+  const [displayLimit, setDisplayLimit] = useState(1000);
   
   const isFetching = useRef(false);
   
@@ -33,7 +34,7 @@ export const MasterData: React.FC = () => {
         const stats = await fetchCloudStats();
         setCloudStats(stats);
         
-        // ถ้าข้อมูลบน Cloud มากกว่าที่มีในเครื่อง หรือต้องการ Force Update
+        // ดึงข้อมูลทั้งหมด 23,000+ รายการ
         const data = await fetchMasterData(forceUpdate, (count) => {
             if (stats.total > 0) {
                 setSyncProgress(Math.floor((count / stats.total) * 100));
@@ -55,12 +56,8 @@ export const MasterData: React.FC = () => {
   useEffect(() => {
     loadSessionData(false);
     
-    // Auto-sync checks for updates every 30 seconds
     const interval = setInterval(() => {
-        fetchCloudStats().then(stats => {
-            setCloudStats(stats);
-            // If cloud data is significantly different, suggest refresh or auto-fetch
-        });
+        fetchCloudStats().then(stats => setCloudStats(stats));
     }, 30000);
     
     return () => clearInterval(interval);
@@ -100,10 +97,6 @@ export const MasterData: React.FC = () => {
     }
   };
 
-  const handleSyncToCloud = async () => {
-      loadSessionData(true);
-  };
-
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingProduct.barcode || !editingProduct.productName) return;
@@ -119,6 +112,7 @@ export const MasterData: React.FC = () => {
     }
   };
 
+  // กรองข้อมูลจาก 23,000+ รายการในเครื่องทันที
   const filtered = products.filter(p => 
     (p.productName || "").toLowerCase().includes(searchTerm.toLowerCase()) || 
     (p.barcode || "").toLowerCase().includes(searchTerm.toLowerCase())
@@ -128,10 +122,10 @@ export const MasterData: React.FC = () => {
     <div className="space-y-6 pb-24 animate-fade-in relative min-h-screen">
       
       {(isProcessing || isLoading) && syncProgress > 0 && (
-          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] w-full max-w-xs">
+          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] w-full max-w-xs px-4">
               <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-xl p-6 rounded-[2rem] shadow-2xl border border-pastel-blue/30 text-center space-y-3">
                   <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] font-black text-pastel-blueDark uppercase tracking-widest">Syncing Cloud Database</span>
+                      <span className="text-[10px] font-black text-pastel-blueDark uppercase tracking-widest">Cloud Database Syncing</span>
                       <span className="text-[10px] font-black text-pastel-blueDark">{syncProgress}%</span>
                   </div>
                   <div className="h-2 w-full bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -179,7 +173,7 @@ export const MasterData: React.FC = () => {
                 <ClipboardCheck size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">QC Checked</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">QC Processed</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()}</p>
             </div>
         </div>
@@ -206,15 +200,15 @@ export const MasterData: React.FC = () => {
                 <FileSpreadsheet size={18} /> นำเข้า Excel
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
             </label>
-            <button onClick={handleSyncToCloud} className="flex-1 min-w-[140px] bg-pastel-blueDark text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all">
-                <CloudUpload size={18} /> ดึงข้อมูลทั้งหมด
+            <button onClick={() => loadSessionData(true)} className="flex-1 min-w-[140px] bg-pastel-blueDark text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all">
+                <CloudUpload size={18} /> รีเฟรชฐานข้อมูล
             </button>
         </div>
 
         <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={20} />
             <input 
-              type="text" placeholder="ค้นหาชื่อ หรือ บาร์โค้ด..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} 
+              type="text" placeholder="ค้นหาบาร์โค้ด หรือชื่อสินค้า (ค้นหาจาก 23,000 รายการ)..." value={searchTerm} onChange={(e) => { setSearchTerm(e.target.value); setDisplayLimit(1000); }} 
               className="w-full pl-12 pr-4 py-5 bg-gray-50 dark:bg-gray-900 border-none rounded-2xl text-sm font-medium shadow-inner dark:text-white focus:ring-4 focus:ring-pastel-blueDark/10 transition-all" 
             />
         </div>
@@ -223,7 +217,7 @@ export const MasterData: React.FC = () => {
       {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400 gap-4">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark" />
-              <p className="text-[10px] font-black uppercase tracking-[0.3em]">กำลังดาวน์โหลดฐานข้อมูล...</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.3em]">กำลังดาวน์โหลดข้อมูลทั้งหมด ({syncProgress}%)...</p>
           </div>
       ) : products.length === 0 ? (
         <div className="p-24 text-center flex flex-col items-center gap-6 text-gray-300 bg-white dark:bg-gray-800 rounded-[3rem] border border-gray-100 dark:border-gray-700 shadow-sm animate-fade-in">
@@ -232,7 +226,7 @@ export const MasterData: React.FC = () => {
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-            <div className="overflow-x-auto no-scrollbar max-h-[600px] overflow-y-auto">
+            <div className="overflow-x-auto no-scrollbar max-h-[700px] overflow-y-auto">
                 <table className="w-full text-left table-fixed">
                     <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[9px] uppercase font-black tracking-widest border-b border-gray-100 dark:border-gray-700 sticky top-0 z-10">
                         <tr>
@@ -243,8 +237,8 @@ export const MasterData: React.FC = () => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
-                        {filtered.slice(0, 500).map(product => ( 
-                            <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 active:bg-gray-100 transition-colors">
+                        {filtered.slice(0, displayLimit).map(product => ( 
+                            <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 transition-colors">
                                 <td className="p-5 pl-8">
                                     <span className="font-mono text-[10px] text-gray-400 bg-gray-50 dark:bg-gray-900 px-2 py-1 rounded">
                                         {product.barcode}
@@ -263,14 +257,23 @@ export const MasterData: React.FC = () => {
                         ))}
                     </tbody>
                 </table>
+                
+                {filtered.length > displayLimit && (
+                    <div className="p-8 flex flex-col items-center justify-center bg-gray-50/50 dark:bg-gray-900/30">
+                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4">แสดงอยู่ {displayLimit.toLocaleString()} จาก {filtered.length.toLocaleString()} รายการ</p>
+                        <button 
+                            onClick={() => setDisplayLimit(prev => prev + 2000)}
+                            className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-10 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest text-pastel-blueDark flex items-center gap-3 shadow-sm hover:bg-pastel-blue/10 transition-all"
+                        >
+                            <ChevronDown size={18} /> แสดงเพิ่มอีก 2,000 รายการ
+                        </button>
+                    </div>
+                )}
             </div>
-            {filtered.length > 500 && (
-                <div className="p-4 bg-amber-50 dark:bg-amber-900/20 text-center text-[10px] font-black uppercase text-amber-600 tracking-widest border-t border-amber-100">
-                    * แสดงผล 500 รายการแรกจากทั้งหมด {filtered.length.toLocaleString()} รายการ (ค้นหาเพื่อดูสินค้าอื่น)
-                </div>
-            )}
-            <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700">
-                รวม {products.length.toLocaleString()} รายการในระบบ
+            
+            <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700 flex justify-between px-10">
+                <span>Total: {products.length.toLocaleString()} items</span>
+                <span>Filtered: {filtered.length.toLocaleString()} items</span>
             </div>
         </div>
       )}

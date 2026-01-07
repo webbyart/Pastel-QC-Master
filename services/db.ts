@@ -2,6 +2,13 @@
 import { ProductMaster, QCRecord, QCStatus, User } from '../types';
 import * as XLSX from 'xlsx';
 
+// Global memory cache for current session
+declare global {
+  interface Window {
+    _cachedMaster?: ProductMaster[];
+  }
+}
+
 const KEYS = {
   USERS: 'qc_users',
   SUPABASE_URL: 'qc_supabase_url',
@@ -82,51 +89,81 @@ export const saveUserData = async (userData: Partial<User>) => {
 export const deleteUserData = async (id: string) => callSupabase('users', 'DELETE', null, `?id=eq.${id}`);
 
 /**
- * ดึงข้อมูลสินค้าทั้งหมด "ทุกรายการ" โดยไม่มีการจำกัด (Pagination Loop)
+ * ดึงข้อมูลสินค้าทั้งหมด "ทุกรายการ" โดยใช้ Range Headers เพื่อประสิทธิภาพสูงสุด
  */
 export const fetchMasterData = async (force = false, onProgress?: (current: number) => void): Promise<ProductMaster[]> => {
-    if (!force) {
-        const cached = localStorage.getItem(KEYS.CACHE_MASTER);
-        if (cached) return JSON.parse(cached);
+    // Return memory cache if available and not forced
+    if (!force && window._cachedMaster && window._cachedMaster.length > 0) {
+        return window._cachedMaster;
     }
 
+    const { url, key } = getSupabaseConfig();
     let allData: any[] = [];
-    let offset = 0;
-    const pageSize = 1000; // Supabase default limit is usually 1000
+    let from = 0;
+    const step = 1000;
     let hasMore = true;
 
-    while (hasMore) {
-        const data = await callSupabase('products', 'GET', null, `?order=barcode.asc&limit=${pageSize}&offset=${offset}`);
-        
-        if (data && data.length > 0) {
-            allData = [...allData, ...data];
-            offset += data.length;
-            
-            if (onProgress) onProgress(offset);
-            
-            // หากดึงมาได้น้อยกว่า pageSize แสดงว่าข้อมูลหมดแล้ว
-            if (data.length < pageSize) {
+    try {
+        while (hasMore) {
+            const to = from + step - 1;
+            const res = await fetchWithRetry(`${url}/rest/v1/products?order=barcode.asc`, {
+                headers: {
+                    'apikey': key,
+                    'Authorization': `Bearer ${key}`,
+                    'Range': `${from}-${to}`,
+                    'Prefer': 'count=exact'
+                }
+            });
+
+            if (!res.ok) throw new Error("Cloud Sync Failed");
+
+            const data = await res.json();
+            if (data && data.length > 0) {
+                allData = [...allData, ...data];
+                from += data.length;
+                if (onProgress) onProgress(from);
+                
+                // ตรวจสอบ Content-Range header เพื่อดูจำนวนทั้งหมด
+                const contentRange = res.headers.get('content-range');
+                if (contentRange) {
+                    const total = parseInt(contentRange.split('/')[1]);
+                    if (from >= total) hasMore = false;
+                } else {
+                    if (data.length < step) hasMore = false;
+                }
+            } else {
                 hasMore = false;
             }
-        } else {
-            hasMore = false;
+            
+            // ป้องกันการวนลูปไม่สิ้นสุด
+            if (from > 200000) break;
+        }
+
+        const mapped = allData.map((item: any) => ({
+            barcode: item.barcode,
+            productName: item.product_name,
+            costPrice: Number(item.cost_price || 0),
+            unitPrice: Number(item.unit_price || 0),
+            lotNo: item.lot_no,
+            productType: item.product_type
+        }));
+        
+        // บันทึกใส่ Memory Cache สำหรับการใช้งานใน Session นี้
+        window._cachedMaster = mapped;
+        
+        // พยายามบันทึกลง LocalStorage (ถ้าข้อมูลไม่ใหญ่เกิน 5MB)
+        try {
+            localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(mapped));
+        } catch (e) {
+            console.warn("LocalStorage full, keeping master data in memory only.");
         }
         
-        // Safety break if database is extremely huge (limit to 100k rows)
-        if (offset > 100000) break;
+        return mapped;
+    } catch (e) {
+        console.error("Fetch Master Data failed:", e);
+        // If failed, return what we have in memory or empty
+        return window._cachedMaster || [];
     }
-
-    const mapped = allData.map((item: any) => ({
-        barcode: item.barcode,
-        productName: item.product_name,
-        costPrice: Number(item.cost_price || 0),
-        unitPrice: Number(item.unit_price || 0),
-        lotNo: item.lot_no,
-        product_type: item.product_type
-    }));
-    
-    localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(mapped));
-    return mapped;
 };
 
 export const fetchMasterDataBatch = async (force = false) => fetchMasterData(force);
@@ -149,7 +186,7 @@ export const fetchQCLogs = async (force = false, filterByInspector?: string): Pr
         imageUrls: item.image_urls || [],
         timestamp: item.timestamp,
         lotNo: item.lot_no,
-        product_type: item.product_type
+        productType: item.product_type
     }));
     localStorage.setItem(KEYS.CACHE_LOGS, JSON.stringify(mapped));
     return mapped;
@@ -158,6 +195,11 @@ export const fetchQCLogs = async (force = false, filterByInspector?: string): Pr
 export const submitQCAndRemoveProduct = async (record: any) => {
     await callSupabase('qc_logs', 'POST', record);
     await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(record.barcode)}`);
+    
+    // อัปเดต Memory Cache ทันทีหลังลบ
+    if (window._cachedMaster) {
+        window._cachedMaster = window._cachedMaster.filter(p => p.barcode !== record.barcode);
+    }
 };
 
 export const saveProduct = async (p: ProductMaster) => {
@@ -171,9 +213,18 @@ export const saveProduct = async (p: ProductMaster) => {
     });
 };
 
-export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(barcode)}`);
+export const deleteProduct = async (barcode: string) => {
+    await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(barcode)}`);
+    if (window._cachedMaster) {
+        window._cachedMaster = window._cachedMaster.filter(p => p.barcode !== barcode);
+    }
+};
 
-export const clearProductsCloud = async () => callSupabase('products', 'DELETE', null, '?barcode=not.is.null');
+export const clearProductsCloud = async () => {
+    await callSupabase('products', 'DELETE', null, '?barcode=not.is.null');
+    window._cachedMaster = [];
+};
+
 export const clearQCLogsCloud = async () => callSupabase('qc_logs', 'DELETE', null, '?id=not.is.null');
 
 export const testApiConnection = async (url: string, key: string) => {
