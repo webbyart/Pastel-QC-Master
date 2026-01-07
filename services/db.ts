@@ -14,14 +14,28 @@ const DEFAULT_SUPABASE_URL = 'https://qxqcimcauwvrwafltzfg.supabase.co';
 const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InF4cWNpbWNhdXd2cndhZmx0emZnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjYwMDcxMjYsImV4cCI6MjA4MTU4MzEyNn0.N_EJbZNHnL0HL5luJOo0QJJruV_U47RNOr0qdzM-pno';
 
 export const getSupabaseConfig = () => ({
-    url: (localStorage.getItem(KEYS.SUPABASE_URL) || DEFAULT_SUPABASE_URL).trim(),
+    url: (localStorage.getItem(KEYS.SUPABASE_URL) || DEFAULT_SUPABASE_URL).trim().replace(/\/$/, ''),
     key: (localStorage.getItem(KEYS.SUPABASE_KEY) || DEFAULT_SUPABASE_KEY).trim()
 });
 
+const fetchWithRetry = async (url: string, options: RequestInit, retries = 3, backoff = 500): Promise<Response> => {
+    try {
+        const response = await fetch(url, options);
+        return response;
+    } catch (error) {
+        if (retries > 0 && (error instanceof TypeError || (error as any).message === 'Failed to fetch')) {
+            await new Promise(resolve => setTimeout(resolve, backoff));
+            return fetchWithRetry(url, options, retries - 1, backoff * 2);
+        }
+        throw error;
+    }
+};
+
 const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'DELETE' = 'GET', body?: any, query: string = '') => {
     const { url, key } = getSupabaseConfig();
+    if (!url.startsWith('http')) throw new Error('Supabase URL ไม่ถูกต้อง');
+
     const endpoint = `${url}/rest/v1/${table}${query}`;
-    
     const headers: HeadersInit = {
         'apikey': key,
         'Authorization': `Bearer ${key}`,
@@ -29,56 +43,80 @@ const callSupabase = async (table: string, method: 'GET' | 'POST' | 'PATCH' | 'D
         'Prefer': 'return=representation'
     };
 
-    const res = await fetch(endpoint, { method, headers, body: body ? JSON.stringify(body) : undefined });
-    if (!res.ok) throw new Error(await res.text());
-    if (res.status === 204) return true;
-    return await res.json();
+    try {
+        const res = await fetchWithRetry(endpoint, { method, headers, body: body ? JSON.stringify(body) : undefined });
+        if (!res.ok) {
+            const errorText = await res.text();
+            let msg = `API Error (${res.status})`;
+            try { msg = JSON.parse(errorText).message || msg; } catch (e) {}
+            throw new Error(msg);
+        }
+        return res.status === 204 ? true : await res.json();
+    } catch (e: any) {
+        throw new Error(e.message === 'Failed to fetch' ? 'เชื่อมต่อฐานข้อมูลล้มเหลว' : e.message);
+    }
 };
 
 export const loginUser = async (username: string): Promise<User | null> => {
-    try {
-        const users = await callSupabase('users', 'GET', null, `?username=eq.${username.toLowerCase()}&limit=1`);
-        if (users && users.length > 0) {
-            const user = users[0];
-            if (user.status !== 'active') throw new Error('บัญชีนี้ถูกระงับการใช้งาน');
-            await callSupabase('users', 'PATCH', { is_online: true, last_login: new Date().toISOString() }, `?id=eq.${user.id}`);
-            return user;
-        }
-    } catch (e: any) {
-        throw new Error(e.message || 'ไม่พบชื่อผู้ใช้หรือรหัสผ่าน');
+    const users = await callSupabase('users', 'GET', null, `?username=eq.${username.toLowerCase()}&limit=1`);
+    if (users?.length > 0) {
+        const user = users[0];
+        if (user.status !== 'active') throw new Error('บัญชีนี้ถูกระงับการใช้งาน');
+        await callSupabase('users', 'PATCH', { is_online: true, last_login: new Date().toISOString() }, `?id=eq.${user.id}`);
+        return user;
     }
     return null;
 };
 
 export const logoutUser = async (userId: string) => {
-    try {
-        await callSupabase('users', 'PATCH', { is_online: false }, `?id=eq.${userId}`);
-    } catch (e) {}
+    try { await callSupabase('users', 'PATCH', { is_online: false }, `?id=eq.${userId}`); } catch (e) {}
 };
 
-export const fetchAllUsers = async (): Promise<User[]> => {
-    return await callSupabase('users', 'GET', null, '?order=is_online.desc,username.asc');
-};
+export const fetchAllUsers = async (): Promise<User[]> => callSupabase('users', 'GET', null, '?order=is_online.desc,username.asc');
 
 export const saveUserData = async (userData: Partial<User>) => {
-    if (userData.id) {
-        return await callSupabase('users', 'PATCH', userData, `?id=eq.${userData.id}`);
-    } else {
-        return await callSupabase('users', 'POST', { ...userData, status: 'active', is_online: false });
-    }
+    if (userData.id) return callSupabase('users', 'PATCH', userData, `?id=eq.${userData.id}`);
+    return callSupabase('users', 'POST', { ...userData, status: 'active', is_online: false });
 };
 
-export const deleteUserData = async (id: string) => {
-    return await callSupabase('users', 'DELETE', null, `?id=eq.${id}`);
-};
+export const deleteUserData = async (id: string) => callSupabase('users', 'DELETE', null, `?id=eq.${id}`);
 
 /**
- * ดึงข้อมูลคลังสินค้าทั้งหมด (รองรับจำนวนมาก)
+ * ดึงข้อมูลสินค้าทั้งหมด "ทุกรายการ" โดยไม่มีการจำกัด (Pagination Loop)
  */
-export const fetchMasterData = async (force = false): Promise<ProductMaster[]> => {
-    // เพิ่ม limit ให้สูงขึ้นเพื่อดึงข้อมูลทั้งหมดตามคำขอ
-    const data = await callSupabase('products', 'GET', null, '?order=barcode.asc&limit=100000');
-    const mapped = data.map((item: any) => ({
+export const fetchMasterData = async (force = false, onProgress?: (current: number) => void): Promise<ProductMaster[]> => {
+    if (!force) {
+        const cached = localStorage.getItem(KEYS.CACHE_MASTER);
+        if (cached) return JSON.parse(cached);
+    }
+
+    let allData: any[] = [];
+    let offset = 0;
+    const pageSize = 1000; // Supabase default limit is usually 1000
+    let hasMore = true;
+
+    while (hasMore) {
+        const data = await callSupabase('products', 'GET', null, `?order=barcode.asc&limit=${pageSize}&offset=${offset}`);
+        
+        if (data && data.length > 0) {
+            allData = [...allData, ...data];
+            offset += data.length;
+            
+            if (onProgress) onProgress(offset);
+            
+            // หากดึงมาได้น้อยกว่า pageSize แสดงว่าข้อมูลหมดแล้ว
+            if (data.length < pageSize) {
+                hasMore = false;
+            }
+        } else {
+            hasMore = false;
+        }
+        
+        // Safety break if database is extremely huge (limit to 100k rows)
+        if (offset > 100000) break;
+    }
+
+    const mapped = allData.map((item: any) => ({
         barcode: item.barcode,
         productName: item.product_name,
         costPrice: Number(item.cost_price || 0),
@@ -86,6 +124,7 @@ export const fetchMasterData = async (force = false): Promise<ProductMaster[]> =
         lotNo: item.lot_no,
         product_type: item.product_type
     }));
+    
     localStorage.setItem(KEYS.CACHE_MASTER, JSON.stringify(mapped));
     return mapped;
 };
@@ -93,7 +132,7 @@ export const fetchMasterData = async (force = false): Promise<ProductMaster[]> =
 export const fetchMasterDataBatch = async (force = false) => fetchMasterData(force);
 
 export const fetchQCLogs = async (force = false, filterByInspector?: string): Promise<QCRecord[]> => {
-    let query = '?order=timestamp.desc';
+    let query = '?order=timestamp.desc&limit=2000';
     if (filterByInspector) query += `&inspector_id=eq.${filterByInspector}`;
     
     const data = await callSupabase('qc_logs', 'GET', null, query);
@@ -132,37 +171,23 @@ export const saveProduct = async (p: ProductMaster) => {
     });
 };
 
-export const deleteProduct = async (barcode: string) => {
-    await callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(barcode)}`);
-};
+export const deleteProduct = async (barcode: string) => callSupabase('products', 'DELETE', null, `?barcode=eq.${encodeURIComponent(barcode)}`);
 
 export const clearProductsCloud = async () => callSupabase('products', 'DELETE', null, '?barcode=not.is.null');
 export const clearQCLogsCloud = async () => callSupabase('qc_logs', 'DELETE', null, '?id=not.is.null');
 
-export const clearAllCloudData = async () => {
-    await clearProductsCloud();
-    await clearQCLogsCloud();
-};
-
 export const testApiConnection = async (url: string, key: string) => {
     try {
-        const res = await fetch(`${url}/rest/v1/users?limit=1`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
+        const res = await fetchWithRetry(`${url}/rest/v1/users?limit=1`, { headers: { apikey: key, Authorization: `Bearer ${key}` } });
         return { success: res.ok };
     } catch (e) { return { success: false }; }
 };
 
 export const exportQCLogs = async (logs: QCRecord[]) => {
-    const worksheet = XLSX.utils.json_to_sheet(logs);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "QC_Logs");
-    XLSX.writeFile(workbook, `QC_Report_${new Date().getTime()}.xlsx`);
-};
-
-export const exportMasterData = async (products: ProductMaster[]) => {
-    const worksheet = XLSX.utils.json_to_sheet(products);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Master_Data");
-    XLSX.writeFile(workbook, `Master_Data_${new Date().getTime()}.xlsx`);
+    const ws = XLSX.utils.json_to_sheet(logs);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "QC_Logs");
+    XLSX.writeFile(wb, `QC_Report_${Date.now()}.xlsx`);
 };
 
 export const setSupabaseConfig = (url: string, key: string) => {
@@ -176,40 +201,28 @@ export const dbGet = async (key: string) => {
 };
 
 /**
- * ดึงสถิติรวมของระบบ Cloud
+ * นับจำนวนข้อมูลสินค้าทั้งหมดแบบ Real-time Efficiency
  */
 export const fetchCloudStats = async () => {
     const { url, key } = getSupabaseConfig();
     try {
-        // ใช้ head=true และ count=exact เพื่อประหยัด Bandwidth ในการนับจำนวน
         const getCount = async (table: string) => {
-            const res = await fetch(`${url}/rest/v1/${table}?select=id`, {
-                method: 'GET',
-                headers: {
-                    'apikey': key,
-                    'Authorization': `Bearer ${key}`,
-                    'Prefer': 'count=exact'
-                }
+            const res = await fetchWithRetry(`${url}/rest/v1/${table}`, {
+                method: 'HEAD',
+                headers: { 'apikey': key, 'Authorization': `Bearer ${key}`, 'Prefer': 'count=exact' }
             });
+            if (!res.ok) return 0;
             const range = res.headers.get('content-range');
-            if (range) {
-                return parseInt(range.split('/')[1]);
-            }
-            // Fallback กรณี headers ไม่ส่งกลับมา
-            const data = await res.json();
-            return Array.isArray(data) ? data.length : 0;
+            return range ? parseInt(range.split('/')[1]) : 0;
         };
 
-        const totalCount = await getCount('products');
-        const logsCount = await getCount('qc_logs');
+        const [totalCount, logsCount] = await Promise.all([
+            getCount('products'),
+            getCount('qc_logs')
+        ]);
 
-        return {
-            total: totalCount,
-            checked: logsCount,
-            remaining: totalCount
-        };
+        return { total: totalCount, checked: logsCount, remaining: totalCount };
     } catch (e) {
-        console.error("Fetch stats error:", e);
         return { total: 0, checked: 0, remaining: 0 };
     }
 };
@@ -220,79 +233,52 @@ export const importMasterData = async (file: File): Promise<ProductMaster[]> => 
         reader.onload = (e) => {
             try {
                 const data = e.target?.result;
-                const workbook = XLSX.read(data, { type: 'array' });
-                const sheetName = workbook.SheetNames[0];
-                const worksheet = workbook.Sheets[sheetName];
-                const json: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+                const wb = XLSX.read(data, { type: 'array' });
+                const json: any[] = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
                 
-                if (json.length === 0) {
-                    resolve([]);
-                    return;
-                }
-
                 const SYNONYMS = {
-                    barcode: ['barcode', 'บาร์โค้ด', 'รหัสสินค้า', 'รหัสบาร์โค้ด', 'barcode_id', 'code', 'id', 'sku', 'รหัส', 'bar code', 'item code'],
-                    productName: ['productName', 'product_name', 'ชื่อสินค้า', 'รายการสินค้า', 'ชื่อ', 'name', 'item', 'product', 'รายการ', 'ชื่อรายการ', 'item name', 'description'],
-                    costPrice: ['costPrice', 'cost_price', 'ต้นทุน', 'ราคาทุน', 'ราคาซื้อ', 'ทุน', 'cost', 'unit cost', 'purchase price'],
-                    unitPrice: ['unitPrice', 'unit_price', 'ราคาขาย', 'ราคา', 'price', 'ขาย', 'หน่วยละ', 'ราคาขายปลีก', 'selling price', 'retail price'],
-                    lotNo: ['lotNo', 'lot_no', 'ล๊อต', 'ล็อต', 'lot', 'batch'],
-                    productType: ['productType', 'product_type', 'ประเภท', 'หมวดหมู่', 'category', 'group', 'type']
+                    barcode: ['barcode', 'บาร์โค้ด', 'รหัสสินค้า'],
+                    productName: ['productName', 'product_name', 'ชื่อสินค้า'],
+                    costPrice: ['costPrice', 'cost_price', 'ต้นทุน'],
+                    unitPrice: ['unitPrice', 'unit_price', 'ราคาขาย'],
+                    lotNo: ['lotNo', 'lot_no', 'ล๊อต'],
+                    productType: ['productType', 'product_type', 'ประเภท']
                 };
 
-                const getValue = (obj: any, keys: string[]) => {
-                    const objKeys = Object.keys(obj);
-                    const foundKey = objKeys.find(k => {
-                        const nk = k.toString().toLowerCase().trim().replace(/[\s_\-]/g, '');
-                        return keys.some(pk => nk === pk.toLowerCase().replace(/[\s_\-]/g, ''));
-                    });
-                    const finalKey = foundKey || objKeys.find(k => {
-                        const nk = k.toString().toLowerCase().trim();
-                        return keys.some(pk => nk.includes(pk.toLowerCase()) || pk.toLowerCase().includes(nk));
-                    });
-                    return finalKey !== undefined ? obj[finalKey] : undefined;
+                const findVal = (obj: any, keys: string[]) => {
+                    const found = Object.keys(obj).find(k => keys.some(pk => k.toLowerCase().includes(pk.toLowerCase())));
+                    return found ? obj[found] : undefined;
                 };
 
-                const products: ProductMaster[] = json.map((item: any) => {
-                    const barcodeRaw = getValue(item, SYNONYMS.barcode);
-                    const nameRaw = getValue(item, SYNONYMS.productName);
-                    const barcode = (barcodeRaw !== undefined && barcodeRaw !== null) ? String(barcodeRaw).trim() : "";
-                    const productName = (nameRaw !== undefined && nameRaw !== null) ? String(nameRaw).trim() : "";
-                    const costPriceRaw = getValue(item, SYNONYMS.costPrice);
-                    const unitPriceRaw = getValue(item, SYNONYMS.unitPrice);
-                    const costPrice = isNaN(parseFloat(String(costPriceRaw))) ? 0 : parseFloat(String(costPriceRaw));
-                    const unitPrice = isNaN(parseFloat(String(unitPriceRaw))) ? 0 : parseFloat(String(unitPriceRaw));
-                    const lotNo = String(getValue(item, SYNONYMS.lotNo) || '').trim();
-                    const productType = String(getValue(item, SYNONYMS.productType) || '').trim();
-                    return { barcode, productName, costPrice, unitPrice, lotNo, productType };
-                }).filter(p => p.barcode !== "" && p.productName !== "");
+                const products: ProductMaster[] = json.map(item => ({
+                    barcode: String(findVal(item, SYNONYMS.barcode) || '').trim(),
+                    productName: String(findVal(item, SYNONYMS.productName) || '').trim(),
+                    costPrice: Number(findVal(item, SYNONYMS.costPrice) || 0),
+                    unitPrice: Number(findVal(item, SYNONYMS.unitPrice) || 0),
+                    lotNo: String(findVal(item, SYNONYMS.lotNo) || '').trim(),
+                    productType: String(findVal(item, SYNONYMS.productType) || '').trim()
+                })).filter(p => p.barcode && p.productName);
                 
                 resolve(products);
-            } catch (err) {
-                reject(err);
-            }
+            } catch (err) { reject(err); }
         };
-        reader.onerror = (err) => reject(err);
         reader.readAsArrayBuffer(file);
     });
 };
 
 export const bulkSaveProducts = async (products: ProductMaster[], onProgress?: (pct: number) => void) => {
-    const total = products.length;
-    if (total === 0) return;
-    
-    const batchSize = 100; // เพิ่ม batch size ให้เร็วขึ้น
-    for (let i = 0; i < total; i += batchSize) {
+    const batchSize = 100;
+    for (let i = 0; i < products.length; i += batchSize) {
         const batch = products.slice(i, i + batchSize).map(p => ({
-            barcode: String(p.barcode).trim(),
-            product_name: String(p.productName).trim(),
-            cost_price: isNaN(Number(p.costPrice)) ? 0 : Number(p.costPrice),
-            unit_price: isNaN(Number(p.unitPrice)) ? 0 : Number(p.unitPrice),
-            lot_no: String(p.lotNo || '').trim(),
-            product_type: String(p.productType || '').trim()
+            barcode: p.barcode,
+            product_name: p.productName,
+            cost_price: p.costPrice,
+            unit_price: p.unitPrice,
+            lot_no: p.lotNo,
+            product_type: p.productType
         }));
-        
         await callSupabase('products', 'POST', batch);
-        if (onProgress) onProgress(Math.min(100, Math.round(((i + batchSize) / total) * 100)));
+        if (onProgress) onProgress(Math.min(100, Math.round(((i + batchSize) / products.length) * 100)));
     }
 };
 
@@ -300,30 +286,17 @@ export const compressImage = async (file: File | Blob): Promise<string> => {
     return new Promise((resolve) => {
         const reader = new FileReader();
         reader.readAsDataURL(file);
-        reader.onload = (event) => {
+        reader.onload = (e) => {
             const img = new Image();
-            img.src = event.target?.result as string;
+            img.src = e.target?.result as string;
             img.onload = () => {
                 const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 1200;
-                const MAX_HEIGHT = 1200;
-                let width = img.width;
-                let height = img.height;
-                if (width > height) {
-                    if (width > MAX_WIDTH) {
-                        height *= MAX_WIDTH / width;
-                        width = MAX_WIDTH;
-                    }
-                } else {
-                    if (height > MAX_HEIGHT) {
-                        width *= MAX_HEIGHT / height;
-                        height = MAX_HEIGHT;
-                    }
-                }
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx?.drawImage(img, 0, 0, width, height);
+                const MAX = 1200;
+                let w = img.width, h = img.height;
+                if (w > h) { if (w > MAX) { h *= MAX / w; w = MAX; } }
+                else { if (h > MAX) { w *= MAX / h; h = MAX; } }
+                canvas.width = w; canvas.height = h;
+                canvas.getContext('2d')?.drawImage(img, 0, 0, w, h);
                 resolve(canvas.toDataURL('image/jpeg', 0.7));
             };
         };

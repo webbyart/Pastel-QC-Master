@@ -2,7 +2,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Box, Loader2, Database, Copy, Check, Terminal, AlertCircle, X } from 'lucide-react';
+import { Box, Loader2, Database, Copy, Check, Terminal, AlertCircle, X, ShieldAlert } from 'lucide-react';
 
 const INITIAL_SQL = `-- 🚀 1. ตารางผู้ใช้งาน
 CREATE TABLE IF NOT EXISTS users (
@@ -81,9 +81,13 @@ export const Login: React.FC = () => {
         }
     } catch (e: any) {
         console.error("Login Error:", e);
-        if (e.message?.includes('PGRST205') || e.message?.includes('users\' not found')) {
-            setError('ระบบตรวจพบว่าฐานข้อมูลยังไม่ถูกติดตั้ง (Missing Table: users)');
+        const errStr = String(e.message || '');
+        
+        if (errStr.includes('PGRST205') || errStr.includes('users\' not found') || errStr.includes('404')) {
+            setError('ระบบตรวจพบว่าฐานข้อมูลยังไม่ถูกติดตั้ง (Missing Table)');
             setShowSetup(true);
+        } else if (errStr.includes('Failed to fetch') || errStr.includes('Network')) {
+            setError('ไม่สามารถเชื่อมต่อฐานข้อมูลได้ (Failed to fetch) กรุณาตรวจสอบอินเทอร์เน็ตหรือ URL ของ Supabase');
         } else {
             setError(e.message || 'การเข้าสู่ระบบล้มเหลว กรุณาตรวจสอบชื่อผู้ใช้');
         }
@@ -125,7 +129,7 @@ export const Login: React.FC = () => {
           {error && (
             <div className={`p-4 rounded-2xl text-[11px] font-bold text-center border animate-fade-in ${showSetup ? 'bg-amber-50 text-amber-700 border-amber-100' : 'bg-red-50 text-red-500 border-red-100'}`}>
               <div className="flex items-center justify-center gap-2 mb-2">
-                <AlertCircle size={16} />
+                {showSetup ? <ShieldAlert size={16} /> : <AlertCircle size={16} />}
                 {error}
               </div>
               {showSetup && (
@@ -157,7 +161,7 @@ export const Login: React.FC = () => {
       {/* Database Setup Modal */}
       {showSetup && (
         <div className="fixed inset-0 z-[1000] flex items-center justify-center p-6 bg-black/60 backdrop-blur-md">
-            <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-8 w-full max-w-2xl shadow-2xl animate-slide-up border border-gray-100 dark:border-gray-700">
+            <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-8 w-full max-w-2xl shadow-2xl animate-slide-up border border-gray-100 dark:border-gray-700 overflow-hidden">
                 <div className="flex justify-between items-center mb-6">
                     <div className="flex items-center gap-3 text-amber-600">
                         <Terminal size={24} />
@@ -166,7 +170,7 @@ export const Login: React.FC = () => {
                     <button onClick={() => setShowSetup(false)} className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-full transition-colors"><X size={20}/></button>
                 </div>
                 
-                <p className="text-sm text-gray-500 mb-6">คัดลอก SQL นี้ไปรันเพื่อสร้างตาราง <b>users, products และ qc_logs</b> ให้ครบถ้วน</p>
+                <p className="text-sm text-gray-500 mb-6">คัดลอก SQL นี้ไปรันใน <b>Supabase SQL Editor</b> เพื่อสร้างตารางที่จำเป็นทั้งหมด</p>
                 
                 <div className="relative group">
                     <pre className="bg-gray-900 text-green-400 p-6 rounded-[2rem] text-[11px] font-mono overflow-x-auto h-[350px] border-4 border-gray-800">
@@ -184,7 +188,7 @@ export const Login: React.FC = () => {
                 <div className="mt-8 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-2xl flex gap-4 border border-blue-100 dark:border-blue-800">
                     <div className="p-2 bg-blue-100 dark:bg-blue-800 rounded-lg h-fit text-blue-600"><Database size={20} /></div>
                     <div className="text-xs text-blue-800 dark:text-blue-200 leading-relaxed">
-                        <b>สำคัญ:</b> หากคุณสแกนแล้วไม่บันทึก อาจเป็นเพราะไม่มีตาราง qc_logs หรือ products กรุณารัน SQL ชุดนี้เพื่อแก้ไขครับ
+                        <b>ขั้นตอนการติดตั้ง:</b> เข้า Supabase Project ของคุณ -> เมนู SQL Editor -> New Query -> วางโค้ดที่คัดลอกไป -> กด <b>Run</b>
                     </div>
                 </div>
             </div>

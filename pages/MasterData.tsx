@@ -1,16 +1,16 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { fetchMasterData, importMasterData, deleteProduct, saveProduct, bulkSaveProducts, clearAllCloudData, exportMasterData, fetchCloudStats, dbGet } from '../services/db';
+import { fetchMasterData, importMasterData, saveProduct, bulkSaveProducts, fetchCloudStats, dbGet } from '../services/db';
 import { ProductMaster } from '../types';
-import { Trash2, Search, Plus, Edit2, Loader2, Box, FileDown, CloudUpload, FileSpreadsheet, AlertTriangle, RefreshCw, Zap, Database, Server, AlertCircle, X, ClipboardCheck, LayoutGrid } from 'lucide-react';
+import { Search, Plus, Edit2, Loader2, Box, CloudUpload, FileSpreadsheet, RefreshCw, Database, LayoutGrid, ClipboardCheck, X, AlertCircle } from 'lucide-react';
 
 export const MasterData: React.FC = () => {
   const [products, setProducts] = useState<ProductMaster[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(0);
   const [cloudStats, setCloudStats] = useState({ remaining: 0, checked: 0, total: 0 });
   
-  const isMounted = useRef(false);
   const isFetching = useRef(false);
   
   // Progress States
@@ -33,7 +33,13 @@ export const MasterData: React.FC = () => {
         const stats = await fetchCloudStats();
         setCloudStats(stats);
         
-        const data = await fetchMasterData(forceUpdate);
+        // ถ้าข้อมูลบน Cloud มากกว่าที่มีในเครื่อง หรือต้องการ Force Update
+        const data = await fetchMasterData(forceUpdate, (count) => {
+            if (stats.total > 0) {
+                setSyncProgress(Math.floor((count / stats.total) * 100));
+            }
+        });
+        
         if (data) {
             setProducts(data);
         }
@@ -42,23 +48,22 @@ export const MasterData: React.FC = () => {
     } finally { 
         setIsLoading(false);
         isFetching.current = false;
+        setSyncProgress(0);
     }
   }, [products.length]);
 
-  useEffect(() => { 
-    if (!isMounted.current) {
-        const init = async () => {
-            try {
-                const cached = await dbGet('qc_cache_master');
-                if (cached && cached.length > 0) {
-                    setProducts(cached);
-                }
-            } catch (e) {}
-            loadSessionData(false); 
-        };
-        init();
-        isMounted.current = true;
-    }
+  useEffect(() => {
+    loadSessionData(false);
+    
+    // Auto-sync checks for updates every 30 seconds
+    const interval = setInterval(() => {
+        fetchCloudStats().then(stats => {
+            setCloudStats(stats);
+            // If cloud data is significantly different, suggest refresh or auto-fetch
+        });
+    }, 30000);
+    
+    return () => clearInterval(interval);
   }, [loadSessionData]);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -71,7 +76,7 @@ export const MasterData: React.FC = () => {
         const newProducts = await importMasterData(file);
         
         if (newProducts.length === 0) {
-            alert('❌ ไม่พบข้อมูลที่ถูกต้องในไฟล์!\n\nกรุณาตรวจสอบว่าหัวตารางมีช่องชื่อ:\n- บาร์โค้ด (หรือ barcode)\n- ชื่อสินค้า (หรือ productName)');
+            alert('❌ ไม่พบข้อมูลที่ถูกต้องในไฟล์');
             setIsProcessing(false);
             return;
         }
@@ -96,18 +101,7 @@ export const MasterData: React.FC = () => {
   };
 
   const handleSyncToCloud = async () => {
-      if (products.length === 0) return;
-      setIsProcessing(true);
-      setProcessLabel('กำลังซิงค์ข้อมูลกับ Cloud...');
-      try {
-          await bulkSaveProducts(products);
-          await loadSessionData(true);
-          setIsProcessing(false);
-          alert('✅ ซิงค์ข้อมูลสำเร็จ!');
-      } catch (e: any) { 
-          alert(`ไม่สามารถบันทึกได้: ${e.message}`); 
-          setIsProcessing(false);
-      }
+      loadSessionData(true);
   };
 
   const handleSaveProduct = async (e: React.FormEvent) => {
@@ -133,7 +127,22 @@ export const MasterData: React.FC = () => {
   return (
     <div className="space-y-6 pb-24 animate-fade-in relative min-h-screen">
       
-      {isProcessing && (
+      {(isProcessing || isLoading) && syncProgress > 0 && (
+          <div className="fixed top-24 left-1/2 -translate-x-1/2 z-[200] w-full max-w-xs">
+              <div className="bg-white/90 dark:bg-gray-800/90 backdrop-blur-xl p-6 rounded-[2rem] shadow-2xl border border-pastel-blue/30 text-center space-y-3">
+                  <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-black text-pastel-blueDark uppercase tracking-widest">Syncing Cloud Database</span>
+                      <span className="text-[10px] font-black text-pastel-blueDark">{syncProgress}%</span>
+                  </div>
+                  <div className="h-2 w-full bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-pastel-blueDark transition-all duration-300" style={{ width: `${syncProgress}%` }}></div>
+                  </div>
+                  <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">Loading {products.length.toLocaleString()} / {cloudStats.total.toLocaleString()} items</p>
+              </div>
+          </div>
+      )}
+
+      {isProcessing && syncProgress === 0 && (
           <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-gray-900/60 backdrop-blur-xl">
               <div className="bg-white dark:bg-gray-800 rounded-[3rem] p-10 w-full max-w-sm shadow-2xl flex flex-col items-center gap-8 animate-slide-up text-center">
                   <div className="w-20 h-20 rounded-full border-4 border-pastel-blueDark border-t-transparent animate-spin flex items-center justify-center">
@@ -146,14 +155,13 @@ export const MasterData: React.FC = () => {
           </div>
       )}
 
-      {/* Stats Section with Updated Labels and Large Counts */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white dark:bg-gray-800 p-6 rounded-[2.5rem] shadow-sm border border-gray-100 dark:border-gray-700 flex items-center gap-5">
             <div className="p-4 bg-pastel-blue/50 rounded-2xl text-pastel-blueDark">
                 <Database size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Total Inventory</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Cloud Total</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.total.toLocaleString()}</p>
             </div>
         </div>
@@ -162,7 +170,7 @@ export const MasterData: React.FC = () => {
                 <LayoutGrid size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">System Inventory</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Local Ready</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{products.length.toLocaleString()}</p>
             </div>
         </div>
@@ -171,7 +179,7 @@ export const MasterData: React.FC = () => {
                 <ClipboardCheck size={24} />
             </div>
             <div>
-                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">Checked</p>
+                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-1">QC Checked</p>
                 <p className="text-2xl font-black text-gray-800 dark:text-white">{cloudStats.checked.toLocaleString()}</p>
             </div>
         </div>
@@ -199,7 +207,7 @@ export const MasterData: React.FC = () => {
                 <input type="file" accept=".xlsx, .xls" className="hidden" onChange={handleFileUpload} />
             </label>
             <button onClick={handleSyncToCloud} className="flex-1 min-w-[140px] bg-pastel-blueDark text-white p-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-lg flex items-center justify-center gap-3 active:scale-95 transition-all">
-                <CloudUpload size={18} /> ซิงค์คลาวด์
+                <CloudUpload size={18} /> ดึงข้อมูลทั้งหมด
             </button>
         </div>
 
@@ -215,21 +223,18 @@ export const MasterData: React.FC = () => {
       {isLoading && products.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-gray-400 gap-4">
               <Loader2 size={40} className="animate-spin text-pastel-blueDark" />
-              <p className="text-[10px] font-black uppercase tracking-[0.3em]">กำลังดึงข้อมูล...</p>
+              <p className="text-[10px] font-black uppercase tracking-[0.3em]">กำลังดาวน์โหลดฐานข้อมูล...</p>
           </div>
       ) : products.length === 0 ? (
         <div className="p-24 text-center flex flex-col items-center gap-6 text-gray-300 bg-white dark:bg-gray-800 rounded-[3rem] border border-gray-100 dark:border-gray-700 shadow-sm animate-fade-in">
             <AlertCircle size={64} className="opacity-10" />
-            <div className="space-y-1">
-                <p className="text-xs font-black uppercase tracking-widest">ยังไม่มีข้อมูลในคลังสินค้า</p>
-                <p className="text-[10px]">กรุณานำเข้าจากไฟล์ Excel หรือกดปุ่มบวกเพื่อเพิ่มสินค้า</p>
-            </div>
+            <p className="text-xs font-black uppercase tracking-widest">ยังไม่มีข้อมูลในคลังสินค้า</p>
         </div>
       ) : (
         <div className="bg-white dark:bg-gray-800 rounded-[3rem] shadow-sm border border-gray-100 dark:border-gray-700 overflow-hidden">
-            <div className="overflow-x-auto no-scrollbar">
+            <div className="overflow-x-auto no-scrollbar max-h-[600px] overflow-y-auto">
                 <table className="w-full text-left table-fixed">
-                    <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[9px] uppercase font-black tracking-widest border-b border-gray-100 dark:border-gray-700">
+                    <thead className="bg-gray-50 dark:bg-gray-900/50 text-gray-400 text-[9px] uppercase font-black tracking-widest border-b border-gray-100 dark:border-gray-700 sticky top-0 z-10">
                         <tr>
                             <th className="p-5 pl-8 w-40">บาร์โค้ด</th>
                             <th className="p-5">ชื่อสินค้า</th>
@@ -238,7 +243,7 @@ export const MasterData: React.FC = () => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-50 dark:divide-gray-700/50">
-                        {filtered.map(product => ( 
+                        {filtered.slice(0, 500).map(product => ( 
                             <tr key={product.barcode} className="hover:bg-gray-50 dark:hover:bg-gray-900/30 active:bg-gray-100 transition-colors">
                                 <td className="p-5 pl-8">
                                     <span className="font-mono text-[10px] text-gray-400 bg-gray-50 dark:bg-gray-900 px-2 py-1 rounded">
@@ -259,11 +264,14 @@ export const MasterData: React.FC = () => {
                     </tbody>
                 </table>
             </div>
-            {filtered.length > 0 && (
-                <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700">
-                    แสดงข้อมูล {filtered.length.toLocaleString()} รายการ
+            {filtered.length > 500 && (
+                <div className="p-4 bg-amber-50 dark:bg-amber-900/20 text-center text-[10px] font-black uppercase text-amber-600 tracking-widest border-t border-amber-100">
+                    * แสดงผล 500 รายการแรกจากทั้งหมด {filtered.length.toLocaleString()} รายการ (ค้นหาเพื่อดูสินค้าอื่น)
                 </div>
             )}
+            <div className="p-6 text-center text-[10px] font-bold text-gray-400 uppercase tracking-widest border-t border-gray-50 dark:border-gray-700">
+                รวม {products.length.toLocaleString()} รายการในระบบ
+            </div>
         </div>
       )}
 
@@ -283,11 +291,11 @@ export const MasterData: React.FC = () => {
 
                     <form onSubmit={handleSaveProduct} className="space-y-6">
                         <div className="space-y-1.5">
-                            <label className="text-[10px] font-black uppercase text-gray-400 ml-2">บาร์โค้ดสินค้า (Barcode)</label>
+                            <label className="text-[10px] font-black uppercase text-gray-400 ml-2">บาร์โค้ดสินค้า</label>
                             <input type="text" required disabled={isEditMode} value={editingProduct.barcode || ''} onChange={e => setEditingProduct({...editingProduct, barcode: e.target.value})} className="w-full p-5 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-mono focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white" placeholder="สแกน หรือ พิมพ์รหัส..." />
                         </div>
                         <div className="space-y-1.5">
-                            <label className="text-[10px] font-black uppercase text-gray-400 ml-2">ชื่อสินค้า (Product Name)</label>
+                            <label className="text-[10px] font-black uppercase text-gray-400 ml-2">ชื่อสินค้า</label>
                             <textarea required rows={2} value={editingProduct.productName || ''} onChange={e => setEditingProduct({...editingProduct, productName: e.target.value})} className="w-full p-5 rounded-2xl bg-gray-50 dark:bg-gray-900 border-none text-sm font-medium resize-none focus:ring-4 focus:ring-pastel-blueDark/10 dark:text-white" placeholder="ระบุชื่อสินค้า..." />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
